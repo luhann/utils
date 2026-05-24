@@ -1,4 +1,5 @@
 use serde_json::Value;
+use shared::command_exists;
 use std::env;
 use std::error::Error;
 use std::process::Command;
@@ -19,7 +20,7 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     let output_mode = parse_output_mode()?;
 
-    if which::which("dunstctl").is_err() {
+    if !command_exists("dunstctl") {
         return Err("dunstctl not available".into());
     }
 
@@ -133,4 +134,66 @@ fn print_help() {
     println!();
     println!("  --json   Force Waybar JSON output");
     println!("  --plain  Force Polybar plain-text output");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_json_flag() {
+        assert!(matches!(
+            parse_output_mode_from_args(["--json"]).unwrap(),
+            OutputMode::Json
+        ));
+    }
+
+    #[test]
+    fn parses_plain_flag() {
+        assert!(matches!(
+            parse_output_mode_from_args(["--plain"]).unwrap(),
+            OutputMode::Plain
+        ));
+    }
+
+    #[test]
+    fn errors_on_both_flags() {
+        assert!(parse_output_mode_from_args(["--json", "--plain"]).is_err());
+        assert!(parse_output_mode_from_args(["--plain", "--json"]).is_err());
+    }
+
+    #[test]
+    fn errors_on_unknown_flag() {
+        assert!(parse_output_mode_from_args(["--foo"]).is_err());
+    }
+
+    // Helper for testing: mimic parse_output_mode but take args as slice
+    fn parse_output_mode_from_args<const N: usize>(
+        args: [&str; N],
+    ) -> Result<OutputMode, Box<dyn std::error::Error>> {
+        let mut output_mode = OutputMode::Auto;
+        for arg in args.iter() {
+            match *arg {
+                "--json" => {
+                    if matches!(output_mode, OutputMode::Plain) {
+                        return Err("cannot combine --json and --plain".into());
+                    }
+                    output_mode = OutputMode::Json;
+                }
+                "--plain" => {
+                    if matches!(output_mode, OutputMode::Json) {
+                        return Err("cannot combine --json and --plain".into());
+                    }
+                    output_mode = OutputMode::Plain;
+                }
+                "-h" | "--help" => {
+                    return Ok(output_mode);
+                }
+                _ => {
+                    return Err(format!("unknown argument: {arg}").into());
+                }
+            }
+        }
+        Ok(output_mode)
+    }
 }

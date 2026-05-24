@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-cargo install --path backlight --locked
-cargo install --path luksctl --locked
-cargo install --path notifi --locked
-cargo install --path search --locked
-cargo install --path wallpaper --locked
-cargo install --path writeback --locked
+cargo install --path bin/backlight --locked
+cargo install --path bin/luksctl --locked
+cargo install --path bin/notifi --locked
+cargo install --path bin/search --locked
+cargo install --path bin/wallpaper --locked
+cargo install --path bin/writeback --locked
