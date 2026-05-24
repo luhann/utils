@@ -21,10 +21,6 @@ fn run() -> Result<(), Box<dyn Error>> {
     let session_type = env::var("XDG_SESSION_TYPE").unwrap_or_default();
 
     if session_type != "wayland" {
-        if which::which("feh").is_err() {
-            return Err("feh is not installed".into());
-        }
-
         let mut command = Command::new("feh");
         command.arg("--no-fehbg");
         if no_xinerama {
@@ -32,17 +28,20 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         command.arg("--bg-fill").arg(&wallpaper);
 
-        let status = command.status()?;
+        let status = match command.status() {
+            Ok(command) => command,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Err("Feh not found on your system".to_string().into());
+            }
+            Err(err) => return Err(err.into()),
+        };
+
         if !status.success() {
             return Err("feh failed".into());
         }
 
         println!("Set X11 wallpaper to: {}", wallpaper.display());
     } else {
-        if which::which("swww").is_err() {
-            return Err("swww is not installed".into());
-        }
-
         let status = Command::new("swww")
             .args([
                 "img",
@@ -94,4 +93,24 @@ fn is_supported_image(path: &Path) -> bool {
             .as_deref(),
         Some("jpg") | Some("jpeg") | Some("png") | Some("webp")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn supports_common_image_extensions() {
+        assert!(is_supported_image(Path::new("foo.jpg")));
+        assert!(is_supported_image(Path::new("foo.jpeg")));
+        assert!(is_supported_image(Path::new("foo.png")));
+        assert!(is_supported_image(Path::new("foo.webp")));
+    }
+
+    #[test]
+    fn rejects_unsupported_extensions() {
+        assert!(!is_supported_image(Path::new("foo.txt")));
+        assert!(!is_supported_image(Path::new("foo")));
+    }
 }

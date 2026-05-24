@@ -6,4 +6,3 @@ edition = "2024"
 [dependencies]
 rand = "0.8.5"
 walkdir = "2.5.0"
-which = "8.0.0"

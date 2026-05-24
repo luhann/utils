@@ -11,6 +11,13 @@ struct Engine {
     description: &'static str,
 }
 
+const DEFAULT_ENGINE: Engine = Engine {
+    key: "default",
+    search_url: "https://www.google.com/search?q=",
+    home_url: "https://www.google.com",
+    description: "google",
+};
+
 const ENGINES: &[Engine] = &[
     Engine {
         key: "gh",
@@ -65,12 +72,6 @@ const ENGINES: &[Engine] = &[
         search_url: "https://www.wikipedia.org/wiki/",
         home_url: "https://www.wikipedia.org",
         description: "wikipedia",
-    },
-    Engine {
-        key: "default",
-        search_url: "https://www.google.com/search?q=",
-        home_url: "https://www.google.com",
-        description: "google",
     },
 ];
 
@@ -127,15 +128,18 @@ fn run_menu(menu_text: &str) -> Result<Option<String>, Box<dyn Error>> {
         )
     };
 
-    if which::which(launcher.program).is_err() {
-        return Err(format!("{} not found", launcher.program).into());
-    }
-
-    let mut child = Command::new(launcher.program)
+    let mut child = match Command::new(launcher.program)
         .args(launcher.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .spawn()?;
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!("Launcher '{}' not found on your system", launcher.program).into());
+        }
+        Err(err) => return Err(err.into()),
+    };
 
     if let Some(stdin) = child.stdin.as_mut() {
         stdin.write_all(menu_text.as_bytes())?;
@@ -200,10 +204,7 @@ fn find_engine(key: &str) -> Option<&'static Engine> {
 }
 
 fn default_engine() -> &'static Engine {
-    ENGINES
-        .iter()
-        .find(|engine| engine.key == "default")
-        .expect("default engine must exist")
+    &DEFAULT_ENGINE
 }
 
 fn url_encode(input: &str) -> String {

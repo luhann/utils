@@ -1,11 +1,6 @@
 [workspace]
 members = [
-    "backlight",
-    "luksctl",
-    "notifi",
-    "search",
-    "wallpaper",
-    "writeback",
+  "crates/*"
 ]
 resolver = "3"
 

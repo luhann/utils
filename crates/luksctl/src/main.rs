@@ -1,3 +1,39 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_valid_actions() {
+        assert!(matches!(parse_action("open").unwrap(), Action::Open));
+        assert!(matches!(parse_action("close").unwrap(), Action::Close));
+        assert!(matches!(parse_action("status").unwrap(), Action::Status));
+    }
+
+    #[test]
+    fn errors_on_invalid_action() {
+        assert!(parse_action("foo").is_err());
+    }
+
+    #[test]
+    fn luks_name_from_path_strips_suffix() {
+        let path = PathBuf::from("/tmp/secret.luks");
+        assert_eq!(luks_name_from_path(&path).unwrap(), "secret");
+    }
+
+    #[test]
+    fn luks_name_from_path_no_suffix() {
+        let path = PathBuf::from("/tmp/secretfile");
+        assert_eq!(luks_name_from_path(&path).unwrap(), "secretfile");
+    }
+
+    #[test]
+    fn luks_name_from_path_errors_on_invalid() {
+        let path = PathBuf::from("");
+        assert!(luks_name_from_path(&path).is_err());
+    }
+}
+use shared::command_exists;
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -264,14 +300,20 @@ fn is_device_open(luks_name: &str) -> bool {
 }
 
 fn is_mounted(mount_point: &Path) -> bool {
-    Command::new("findmnt")
-        .arg("-M")
-        .arg(mount_point)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    let Ok(mounts) = fs::read_to_string("/proc/mounts") else {
+        return false;
+    };
+
+    // Standardize the path to a string to match against /proc/mounts text
+    let mount_str = mount_point.to_string_lossy();
+
+    // Each line looks like: /dev/mapper/luks_name /home/user/mount_point ext4 rw...
+    // We check if our mount point is listed as the second item on any line
+    mounts.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        parts.next();
+        parts.next() == Some(&mount_str) // Check the mount target
+    })
 }
 
 fn df_last_line(mount_point: &Path) -> Result<Option<String>, Box<dyn Error>> {
@@ -295,9 +337,9 @@ fn df_last_line(mount_point: &Path) -> Result<Option<String>, Box<dyn Error>> {
 }
 
 fn detect_privilege_runner() -> PrivilegeRunner {
-    if which::which("sudo").is_ok() {
+    if command_exists("sudo") {
         PrivilegeRunner::Sudo
-    } else if which::which("run0").is_ok() {
+    } else if command_exists("run0") {
         PrivilegeRunner::Run0
     } else {
         PrivilegeRunner::None

@@ -1,6 +1,5 @@
 use std::env;
 use std::error::Error;
-use std::path::Path;
 use std::process::Command;
 
 const MIN_BRIGHTNESS: u8 = 0;
@@ -15,23 +14,11 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
-    let program = env::args()
-        .next()
-        .and_then(|p| {
-            Path::new(&p)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-        })
-        .unwrap_or_else(|| "backlight".to_owned());
 
     if args.is_empty() || args.len() > 2 {
         eprintln!("Usage:");
-        eprintln!(
-            "  {program} <brightness 0-100>                 # Set both displays to same brightness"
-        );
-        eprintln!(
-            "  {program} <brightness1 0-100> <brightness2 0-100>  # Set each display individually"
-        );
+        eprintln!("  backlight <brightness 0-100>");
+        eprintln!("  backlight <brightness1 0-100> <brightness2 0-100>");
         return Err("invalid argument count".into());
     }
 
@@ -86,4 +73,29 @@ fn parse_brightness(raw: &str, arg_name: &str) -> Result<u8, Box<dyn Error>> {
     }
 
     Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_valid_brightness() {
+        assert_eq!(parse_brightness("42", "test").unwrap(), 42);
+    }
+
+    #[test]
+    fn errors_on_non_numeric() {
+        assert!(parse_brightness("abc", "test").is_err());
+    }
+
+    #[test]
+    fn errors_on_too_low() {
+        assert!(parse_brightness("-1", "test").is_err());
+    }
+
+    #[test]
+    fn errors_on_too_high() {
+        assert!(parse_brightness("101", "test").is_err());
+    }
 }
