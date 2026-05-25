@@ -1,4 +1,3 @@
-use rand::seq::IteratorRandom;
 use std::env;
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -42,7 +41,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
         println!("Set X11 wallpaper to: {}", wallpaper.display());
     } else {
-        let status = Command::new("swww")
+        let status = match Command::new("awww")
             .args([
                 "img",
                 "--transition-fps",
@@ -55,10 +54,17 @@ fn run() -> Result<(), Box<dyn Error>> {
                 "135",
             ])
             .arg(&wallpaper)
-            .status()?;
+            .status()
+        {
+            Ok(status) => status,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Err("awww not found on your system. Is the daemon running?".into());
+            }
+            Err(err) => return Err(err.into()),
+        };
 
         if !status.success() {
-            return Err("swww failed".into());
+            return Err("awww failed".into());
         }
 
         println!("Set Wayland wallpaper to: {}", wallpaper.display());
@@ -72,27 +78,43 @@ fn home_dir() -> Result<PathBuf, Box<dyn Error>> {
     Ok(PathBuf::from(home))
 }
 
+// Reservoir sampling - Algorithm R
 fn pick_random_wallpaper(dir: &Path) -> Result<Option<PathBuf>, Box<dyn Error>> {
-    let mut rng = rand::thread_rng();
+    // I investigated algorithm L, but for selecting only 1 element algorithm L is actually
+    // less efficient than algorithm R (because of CPU floating point operations not inherently),
+    // hence we keep algorithm R here.
+    // If I ever wanted to select more than 1 file at a time then algorithm L is more efficient.
+    // Likely algorithm R will be more efficient until the k I want to select is in the thousands
+    // and the n I'm selecting from is in the 10s of thousands
     let candidates = WalkDir::new(dir)
-        .follow_links(false)
         .into_iter()
         .filter_map(Result::ok)
-        .map(|entry| entry.into_path())
-        .filter(|path| path.is_file())
-        .filter(|path| is_supported_image(path));
+        // Filter using the borrowed DirEntry to avoid early allocations
+        .filter(|entry| entry.file_type().is_file() && is_supported_image(entry.path()));
 
-    Ok(candidates.choose(&mut rng))
+    let mut chosen = None;
+
+    // Reservoir sampling for a single item
+    for (i, entry) in candidates.enumerate() {
+        if fastrand::usize(..=i) == 0 {
+            // Allocate the PathBuf ONLY when a file wins the reservoir slot
+            chosen = Some(entry.into_path());
+        }
+    }
+
+    Ok(chosen)
 }
 
 fn is_supported_image(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_ascii_lowercase())
-            .as_deref(),
-        Some("jpg") | Some("jpeg") | Some("png") | Some("webp")
-    )
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            ext.eq_ignore_ascii_case("jpg")
+                || ext.eq_ignore_ascii_case("jpeg")
+                || ext.eq_ignore_ascii_case("png")
+                || ext.eq_ignore_ascii_case("webp")
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

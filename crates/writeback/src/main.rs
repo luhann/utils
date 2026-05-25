@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io;
 
 #[derive(Debug, Default, PartialEq)]
 struct CliOptions {
@@ -51,19 +51,37 @@ where
     Ok(options)
 }
 
-fn parse_writeback_kb<R: BufRead>(reader: R) -> io::Result<u64> {
-    for line_result in reader.lines() {
-        let line = line_result?;
+fn parse_writeback_kb<R: std::io::Read>(mut reader: R) -> io::Result<u64> {
+    let mut buffer = [0u8; 4096];
+    let bytes_read = reader.read(&mut buffer)?;
 
-        if let Some(rest) = line.strip_prefix("Writeback:") {
-            let value = rest.split_whitespace().next().unwrap_or("0");
+    if bytes_read == buffer.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::OutOfMemory,
+            "/proc/meminfo exceeded the 4KB stack buffer ceiling",
+        ));
+    }
 
-            return value.parse::<u64>().map_err(|err| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("invalid Writeback value '{value}': {err}"),
-                )
-            });
+    let data = &buffer[..bytes_read];
+
+    if let Some(idx) = data.windows(10).position(|w| w == b"Writeback:") {
+        let mut pos = idx + 10;
+
+        while pos < data.len() && data[pos] == b' ' {
+            pos += 1;
+        }
+
+        let mut value = 0u64;
+        let mut found_digit = false;
+
+        while pos < data.len() && data[pos].is_ascii_digit() {
+            value = value * 10 + (data[pos] - b'0') as u64;
+            pos += 1;
+            found_digit = true;
+        }
+
+        if found_digit {
+            return Ok(value);
         }
     }
 
@@ -82,15 +100,13 @@ fn main() {
         }
     };
 
-    let file = match File::open("/proc/meminfo") {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("Error reading file: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let file = File::open("/proc/meminfo").unwrap_or_else(|e| {
+        eprintln!("Error reading file: {e}");
+        std::process::exit(1);
+    });
 
-    let size_kb = match parse_writeback_kb(BufReader::new(file)) {
+    // Pass the raw File descriptor directly, bypassing the BufReader layer entirely
+    let size_kb = match parse_writeback_kb(file) {
         Ok(value) => value,
         Err(e) => {
             eprintln!("Error parsing meminfo: {}", e);

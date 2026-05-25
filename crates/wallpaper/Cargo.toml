@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rand = "0.8.5"
+fastrand = "2.4.1"
 walkdir = "2.5.0"

@@ -2,6 +2,7 @@ use std::env;
 use std::error::Error;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use urlencoding::encode;
 
 #[derive(Clone, Copy, Debug)]
 struct Engine {
@@ -89,12 +90,16 @@ fn run() -> Result<(), Box<dyn Error>> {
     };
 
     let (engine_key, search_terms) = parse_selection(&selection);
-    let engine = find_engine(&engine_key).unwrap_or(default_engine());
+    let engine = find_engine(engine_key).unwrap_or(&DEFAULT_ENGINE);
 
     let target = if search_terms.is_empty() {
         engine.home_url.to_owned()
     } else {
-        format!("{}{}", engine.search_url, url_encode(&search_terms))
+        format!(
+            "{}{}",
+            engine.search_url,
+            encode(search_terms).replace("%20", "+")
+        )
     };
 
     Command::new("xdg-open")
@@ -107,36 +112,45 @@ fn run() -> Result<(), Box<dyn Error>> {
 }
 
 fn build_menu_text() -> String {
-    let mut lines = Vec::with_capacity(ENGINES.len());
-    lines.push(format!("Default: {}", default_engine().description));
-
-    for engine in ENGINES.iter().filter(|engine| engine.key != "default") {
-        lines.push(format!("!{}: {}", engine.key, engine.description));
+    let mut capacity = DEFAULT_ENGINE.description.len() + 10;
+    for e in ENGINES {
+        capacity += e.key.len() + e.description.len() + 4;
     }
 
-    lines.join("\n")
+    let mut output = String::with_capacity(capacity);
+    output.push_str("Default: ");
+    output.push_str(DEFAULT_ENGINE.description);
+
+    for engine in ENGINES {
+        output.push_str("\n!");
+        output.push_str(engine.key);
+        output.push_str(": ");
+        output.push_str(engine.description);
+    }
+
+    output
 }
 
 fn run_menu(menu_text: &str) -> Result<Option<String>, Box<dyn Error>> {
     let session_type = env::var("XDG_SESSION_TYPE").unwrap_or_default();
-    let launcher = if session_type == "wayland" {
-        Launcher::new("fuzzel", &["--dmenu", "--prompt", "search:"])
+    let (program, args): (&str, &[&str]) = if session_type == "wayland" {
+        ("fuzzel", &["--dmenu", "--prompt", "search:"])
     } else {
-        Launcher::new(
+        (
             "rofi",
             &["-dmenu", "-p", "search:", "-mesg", "search options"],
         )
     };
 
-    let mut child = match Command::new(launcher.program)
-        .args(launcher.args)
+    let mut child = match Command::new(program)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
     {
         Ok(child) => child,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("Launcher '{}' not found on your system", launcher.program).into());
+            return Err(format!("Launcher '{program}' not found on your system").into());
         }
         Err(err) => return Err(err.into()),
     };
@@ -146,20 +160,22 @@ fn run_menu(menu_text: &str) -> Result<Option<String>, Box<dyn Error>> {
     }
 
     let output = child.wait_with_output()?;
-
     if !output.status.success() {
         return Ok(None);
     }
 
-    let selection = String::from_utf8(output.stdout)?.trim().to_owned();
-    if selection.is_empty() {
+    let selection = String::from_utf8(output.stdout)?;
+    let trimmed = selection.trim();
+
+    if trimmed.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(selection))
+        Ok(Some(trimmed.to_owned()))
     }
 }
 
-fn parse_selection(selection: &str) -> (String, String) {
+// Memory Optimization: Shift from returning String to returning zero-allocation &str slices
+fn parse_selection(selection: &str) -> (&str, &str) {
     if let Some((menu_choice, after_colon)) = selection.split_once(':') {
         let trimmed_after = after_colon.trim();
 
@@ -169,22 +185,20 @@ fn parse_selection(selection: &str) -> (String, String) {
                 .unwrap_or_default();
 
             let search_terms = if trimmed_after == expected_desc {
-                String::new()
+                ""
             } else {
-                trimmed_after.to_owned()
+                trimmed_after
             };
-
-            return (bang.to_owned(), search_terms);
+            return (bang, search_terms);
         }
 
         if menu_choice.starts_with("Default") {
-            let search_terms = if trimmed_after == default_engine().description {
-                String::new()
+            let search_terms = if trimmed_after == DEFAULT_ENGINE.description {
+                ""
             } else {
-                trimmed_after.to_owned()
+                trimmed_after
             };
-
-            return ("default".to_owned(), search_terms);
+            return ("default", search_terms);
         }
     }
 
@@ -193,33 +207,14 @@ fn parse_selection(selection: &str) -> (String, String) {
     let rest = parts.next().unwrap_or_default().trim();
 
     if let Some(bang) = first.strip_prefix('!') {
-        (bang.to_owned(), rest.to_owned())
+        (bang, rest)
     } else {
-        ("default".to_owned(), selection.trim().to_owned())
+        ("default", selection.trim())
     }
 }
 
 fn find_engine(key: &str) -> Option<&'static Engine> {
     ENGINES.iter().find(|engine| engine.key == key)
-}
-
-fn default_engine() -> &'static Engine {
-    &DEFAULT_ENGINE
-}
-
-fn url_encode(input: &str) -> String {
-    urlencoding::encode(input).replace("%20", "+")
-}
-
-struct Launcher<'a> {
-    program: &'a str,
-    args: &'a [&'a str],
-}
-
-impl<'a> Launcher<'a> {
-    const fn new(program: &'a str, args: &'a [&'a str]) -> Self {
-        Self { program, args }
-    }
 }
 
 #[cfg(test)]
@@ -228,30 +223,27 @@ mod tests {
 
     #[test]
     fn parses_direct_bang_command() {
-        assert_eq!(
-            parse_selection("!gh rust traits"),
-            ("gh".into(), "rust traits".into())
-        );
+        assert_eq!(parse_selection("!gh rust traits"), ("gh", "rust traits"));
     }
 
     #[test]
     fn parses_plain_default_search() {
         assert_eq!(
             parse_selection("rust closures"),
-            ("default".into(), "rust closures".into())
+            ("default", "rust closures")
         );
     }
 
     #[test]
     fn treats_menu_description_as_empty_query() {
-        assert_eq!(parse_selection("!gh: github"), ("gh".into(), String::new()));
+        assert_eq!(parse_selection("!gh: github"), ("gh", ""));
     }
 
     #[test]
     fn parses_menu_bang_search_terms() {
         assert_eq!(
             parse_selection("!gh: rust ownership"),
-            ("gh".into(), "rust ownership".into())
+            ("gh", "rust ownership")
         );
     }
 
@@ -259,15 +251,12 @@ mod tests {
     fn parses_default_menu_search_terms() {
         assert_eq!(
             parse_selection("Default: rust borrow checker"),
-            ("default".into(), "rust borrow checker".into())
+            ("default", "rust borrow checker")
         );
     }
 
     #[test]
     fn treats_default_menu_description_as_empty_query() {
-        assert_eq!(
-            parse_selection("Default: google"),
-            ("default".into(), String::new())
-        );
+        assert_eq!(parse_selection("Default: google"), ("default", ""));
     }
 }
