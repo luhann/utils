@@ -1,4 +1,3 @@
-use std::env;
 use std::error::Error;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -76,6 +75,12 @@ const ENGINES: &[Engine] = &[
     },
 ];
 
+enum MenuResult {
+    Selected(String),
+    ToggleHelp,
+    Cancelled,
+}
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("search-rs: {err}");
@@ -84,22 +89,43 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let menu_text = build_menu_text();
-    let Some(selection) = run_menu(&menu_text)? else {
-        return Ok(());
+    let full_menu_text = build_menu_text();
+    let mut show_help = false;
+
+    let selection = loop {
+        let menu_text = if show_help { &full_menu_text } else { "" };
+
+        match run_menu(menu_text)? {
+            MenuResult::Selected(sel) => break sel,
+            MenuResult::ToggleHelp => {
+                show_help = !show_help;
+                continue;
+            }
+            MenuResult::Cancelled => return Ok(()),
+        }
     };
 
     let (engine_key, search_terms) = parse_selection(&selection);
-    let engine = find_engine(engine_key).unwrap_or(&DEFAULT_ENGINE);
 
-    let target = if search_terms.is_empty() {
-        engine.home_url.to_owned()
+    let target = if engine_key == "default" && is_direct_url(search_terms) {
+        // If it looks like a URL, bypass the search engine entirely.
+        if search_terms.starts_with("http") {
+            search_terms.to_owned()
+        } else {
+            format!("https://{}", search_terms)
+        }
     } else {
-        format!(
-            "{}{}",
-            engine.search_url,
-            encode(search_terms).replace("%20", "+")
-        )
+        // Otherwise, proceed with the normal search engine logic.
+        let engine = find_engine(engine_key).unwrap_or(&DEFAULT_ENGINE);
+        if search_terms.is_empty() {
+            engine.home_url.to_owned()
+        } else {
+            format!(
+                "{}{}",
+                engine.search_url,
+                encode(search_terms).replace("%20", "+")
+            )
+        }
     };
 
     Command::new("xdg-open")
@@ -118,7 +144,7 @@ fn build_menu_text() -> String {
     }
 
     let mut output = String::with_capacity(capacity);
-    output.push_str("Default: ");
+    output.push_str("default: ");
     output.push_str(DEFAULT_ENGINE.description);
 
     for engine in ENGINES {
@@ -131,26 +157,19 @@ fn build_menu_text() -> String {
     output
 }
 
-fn run_menu(menu_text: &str) -> Result<Option<String>, Box<dyn Error>> {
-    let session_type = env::var("XDG_SESSION_TYPE").unwrap_or_default();
-    let (program, args): (&str, &[&str]) = if session_type == "wayland" {
-        ("fuzzel", &["--dmenu", "--prompt", "search:"])
-    } else {
-        (
-            "rofi",
-            &["-dmenu", "-p", "search:", "-mesg", "search options"],
-        )
-    };
+fn run_menu(menu_text: &str) -> Result<MenuResult, Box<dyn Error>> {
+    // Rofi arguments, alt-h is used to exit and switch to help mode
+    let args = vec!["-dmenu", "-p", "search:", "-kb-custom-1", "Alt+h"];
 
-    let mut child = match Command::new(program)
-        .args(args)
+    let mut child = match Command::new("rofi")
+        .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
     {
         Ok(child) => child,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!("Launcher '{program}' not found on your system").into());
+            return Err("Launcher 'rofi' not found on your system".into());
         }
         Err(err) => return Err(err.into()),
     };
@@ -160,18 +179,30 @@ fn run_menu(menu_text: &str) -> Result<Option<String>, Box<dyn Error>> {
     }
 
     let output = child.wait_with_output()?;
+    let status_code = output.status.code().unwrap_or(0);
+
+    // Rofi custom keybinds start at exit code 10
+    if status_code == 10 {
+        return Ok(MenuResult::ToggleHelp);
+    }
+
+    // Standard cancellation (Escape key or clicking away)
     if !output.status.success() {
-        return Ok(None);
+        return Ok(MenuResult::Cancelled);
     }
 
     let selection = String::from_utf8(output.stdout)?;
     let trimmed = selection.trim();
 
     if trimmed.is_empty() {
-        Ok(None)
+        Ok(MenuResult::Cancelled)
     } else {
-        Ok(Some(trimmed.to_owned()))
+        Ok(MenuResult::Selected(trimmed.to_owned()))
     }
+}
+
+fn find_engine(key: &str) -> Option<&'static Engine> {
+    ENGINES.iter().find(|engine| engine.key == key)
 }
 
 // Memory Optimization: Shift from returning String to returning zero-allocation &str slices
@@ -213,8 +244,20 @@ fn parse_selection(selection: &str) -> (&str, &str) {
     }
 }
 
-fn find_engine(key: &str) -> Option<&'static Engine> {
-    ENGINES.iter().find(|engine| engine.key == key)
+fn is_direct_url(query: &str) -> bool {
+    // If it has spaces, it's definitely a search query.
+    if query.contains(' ') {
+        return false;
+    }
+
+    // If it starts with a protocol, it's definitely a URL.
+    if query.starts_with("http://") || query.starts_with("https://") {
+        return true;
+    }
+
+    // If it has no spaces and contains a dot (e.g., "archlinux.org"),
+    // it's highly likely a URL.
+    query.contains('.')
 }
 
 #[cfg(test)]
