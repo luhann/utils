@@ -1,6 +1,6 @@
 target_dir := join(home_dir(), "bin")
 
-bins := replace(
+utils := replace(
     replace_regex(
         replace_regex(
             shell("fd '^main\\.rs$' crates/ -X dirname"),
@@ -25,8 +25,8 @@ build-all:
 # Install everything automatically
 install-all: build-all
     @mkdir -p {{target_dir}}
-    @for bin in {{bins}}; do \
-        cp -v "target/release/$bin" {{target_dir}}/; \
+    @for util in {{utils}}; do \
+        install -vDm755 "target/release/$util" "{{target_dir}}/$util"; \
     done
 
 # Install just a single specific utility
@@ -34,7 +34,7 @@ install utility:
     @echo "Building and installing {{utility}}..."
     @cargo build --release -p {{utility}}
     @mkdir -p {{target_dir}}
-    @cp -v "target/release/{{utility}}" {{target_dir}}/
+    @install -vDm755 "target/release/{{utility}}" "{{target_dir}}/{{utility}}"; \
 
 # Run all tests in release mode
 test:
