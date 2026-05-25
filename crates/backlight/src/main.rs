@@ -14,23 +14,21 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
-
-    if args.is_empty() || args.len() > 2 {
-        eprintln!("Usage:");
-        eprintln!("  backlight <brightness 0-100>");
-        eprintln!("  backlight <brightness1 0-100> <brightness2 0-100>");
-        return Err("invalid argument count".into());
+    match args.as_slice() {
+        [b1] => set_brightness(b1, b1),
+        [b1, b2] => set_brightness(b1, b2),
+        _ => {
+            eprintln!(
+                "Usage:\n  backlight <brightness 0-100>\n  backlight <brightness1 0-100> <brightness2 0-100>"
+            );
+            Err("invalid argument count".into())
+        }
     }
+}
 
-    let brightness_display_1 = parse_brightness(&args[0], "brightness")?;
-    let brightness_display_2 = if args.len() == 2 {
-        parse_brightness(&args[1], "brightness")?
-    } else {
-        brightness_display_1
-    };
-
-    let brightness_display_1 = brightness_display_1.to_string();
-    let brightness_display_2 = brightness_display_2.to_string();
+fn set_brightness(b1: &str, b2: &str) -> Result<(), Box<dyn Error>> {
+    let brightness_display_1 = parse_brightness(b1, "brightness")?.to_string();
+    let brightness_display_2 = parse_brightness(b2, "brightness")?.to_string();
 
     let mut display_1 = spawn_ddcutil("1", &brightness_display_1)?;
     let mut display_2 = spawn_ddcutil("2", &brightness_display_2)?;
@@ -41,7 +39,6 @@ fn run() -> Result<(), Box<dyn Error>> {
     if !status_1.success() || !status_2.success() {
         return Err("one or more ddcutil commands failed".into());
     }
-
     Ok(())
 }
 

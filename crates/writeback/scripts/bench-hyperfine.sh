@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-RUNS="${1:-500}"
-WARMUP="${2:-100}"
+RUNS="${1:-1000}"
+WARMUP="${2:-200}"
 
 if ! command -v hyperfine >/dev/null 2>&1; then
   echo "hyperfine is not installed."

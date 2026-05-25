@@ -24,16 +24,14 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("dunstctl not available".into());
     }
 
-    let is_paused = run_dunstctl(["is-paused"])?.trim() == "true";
-    let waiting_count: u64 = run_dunstctl(["count", "waiting"])?
+    let is_paused = run_dunstctl(&["is-paused"])?.trim() == "true";
+    let waiting_count: u64 = run_dunstctl(&["count", "waiting"])?
         .trim()
         .parse()
         .unwrap_or(0);
-    let num_notifications = history_count()?;
 
-    let is_wayland = env::var("XDG_SESSION_TYPE")
-        .map(|value| value == "wayland")
-        .unwrap_or(false);
+    let num_notifications = history_count()?;
+    let is_wayland = env::var("XDG_SESSION_TYPE").is_ok_and(|v| v == "wayland");
 
     let emit_json = match output_mode {
         OutputMode::Json => true,
@@ -42,57 +40,52 @@ fn run() -> Result<(), Box<dyn Error>> {
     };
 
     if emit_json {
-        let enabled_icon = "";
-        let disabled_icon = "";
-
-        if is_paused {
-            let output_text = if waiting_count > 0 {
-                format!("{disabled_icon} {waiting_count}")
+        let (text, class, alt) = if is_paused {
+            let icon = "";
+            let txt = if waiting_count > 0 {
+                format!("{icon} {waiting_count}")
             } else {
-                disabled_icon.to_owned()
+                icon.to_owned()
             };
-
-            let output = serde_json::json!({
-                "text": output_text,
-                "class": "paused",
-                "tooltip": num_notifications.to_string(),
-            });
-            println!("{}", output);
+            (txt, "paused", None)
         } else {
-            let output = serde_json::json!({
-                "text": enabled_icon,
-                "alt": "active",
-                "tooltip": num_notifications.to_string(),
-            });
-            println!("{}", output);
-        }
-    } else if is_paused {
-        println!("%{{F#821717}} %{{F-}}");
+            ("".to_owned(), "active", Some("active"))
+        };
+
+        let output = serde_json::json!({
+            "text": text,
+            "class": class,
+            "alt": alt,
+            "tooltip": num_notifications.to_string(),
+        });
+        println!("{}", output);
     } else {
-        println!("");
+        // Polybar formatting
+        let text = if is_paused {
+            "%{F#821717} %{F-}"
+        } else {
+            ""
+        };
+        println!("{}", text);
     }
 
     Ok(())
 }
 
-fn run_dunstctl<const N: usize>(args: [&str; N]) -> Result<String, Box<dyn Error>> {
+fn run_dunstctl(args: &[&str]) -> Result<String, Box<dyn Error>> {
     let output = Command::new("dunstctl").args(args).output()?;
     if !output.status.success() {
         return Err(format!("dunstctl command failed: {}", args.join(" ")).into());
     }
-
     Ok(String::from_utf8(output.stdout)?)
 }
 
 fn history_count() -> Result<usize, Box<dyn Error>> {
-    let history_raw = run_dunstctl(["history"])?;
+    let history_raw = run_dunstctl(&["history"])?;
     let history_json: Value = serde_json::from_str(&history_raw)?;
 
-    let count = history_json
-        .get("data")
-        .and_then(Value::as_array)
-        .and_then(|data| data.first())
-        .and_then(Value::as_array)
+    let count = history_json["data"][0]
+        .as_array()
         .map(|notifications| notifications.len())
         .unwrap_or(0);
 
@@ -117,23 +110,16 @@ fn parse_output_mode() -> Result<OutputMode, Box<dyn Error>> {
                 output_mode = OutputMode::Plain;
             }
             "-h" | "--help" => {
-                print_help();
+                println!(
+                    "Usage: notifi [--json|--plain]\n\n  --json   Force Waybar JSON output\n  --plain  Force Polybar plain-text output"
+                );
                 std::process::exit(0);
             }
-            _ => {
-                return Err(format!("unknown argument: {arg}").into());
-            }
+            _ => return Err(format!("unknown argument: {arg}").into()),
         }
     }
 
     Ok(output_mode)
-}
-
-fn print_help() {
-    println!("Usage: notifi [--json|--plain]");
-    println!();
-    println!("  --json   Force Waybar JSON output");
-    println!("  --plain  Force Polybar plain-text output");
 }
 
 #[cfg(test)]

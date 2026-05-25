@@ -14,6 +14,10 @@ bins := replace(
 default:
     @just --list
 
+# Clean cargo artefacts
+clean:
+  cargo clean
+
 # Build everything
 build-all:
     cargo build --release
@@ -31,3 +35,7 @@ install utility:
     @cargo build --release -p {{utility}}
     @mkdir -p {{target_dir}}
     @cp -v "target/release/{{utility}}" {{target_dir}}/
+
+# Run all tests in release mode
+test:
+  cargo test --release
