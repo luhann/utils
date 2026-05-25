@@ -55,13 +55,6 @@ fn parse_writeback_kb<R: std::io::Read>(mut reader: R) -> io::Result<u64> {
     let mut buffer = [0u8; 4096];
     let bytes_read = reader.read(&mut buffer)?;
 
-    if bytes_read == buffer.len() {
-        return Err(io::Error::new(
-            io::ErrorKind::OutOfMemory,
-            "/proc/meminfo exceeded the 4KB stack buffer ceiling",
-        ));
-    }
-
     let data = &buffer[..bytes_read];
 
     if let Some(idx) = data.windows(10).position(|w| w == b"Writeback:") {
@@ -83,6 +76,13 @@ fn parse_writeback_kb<R: std::io::Read>(mut reader: R) -> io::Result<u64> {
         if found_digit {
             return Ok(value);
         }
+    }
+
+    if bytes_read == buffer.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::OutOfMemory,
+            "/proc/meminfo exceeded the 4KB stack buffer ceiling",
+        ));
     }
 
     Err(io::Error::new(
