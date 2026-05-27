@@ -54,10 +54,23 @@ where
 fn parse_writeback_kb<R: std::io::Read>(mut reader: R) -> io::Result<u64> {
     let mut buffer = [0u8; 4096];
     let bytes_read = reader.read(&mut buffer)?;
-
     let data = &buffer[..bytes_read];
 
-    if let Some(idx) = data.windows(10).position(|w| w == b"Writeback:") {
+    let mut current_idx = 0;
+    let mut match_idx = None;
+
+    while let Some(offset) = data[current_idx..].iter().position(|&b| b == b'W') {
+        current_idx += offset;
+
+        if current_idx + 10 <= data.len() && &data[current_idx..current_idx + 10] == b"Writeback:" {
+            match_idx = Some(current_idx);
+            break;
+        }
+
+        current_idx += 1;
+    }
+
+    if let Some(idx) = match_idx {
         let mut pos = idx + 10;
 
         while pos < data.len() && data[pos] == b' ' {
