@@ -25,7 +25,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         if no_xinerama {
             command.arg("--no-xinerama");
         }
-        command.arg("--bg-fill").arg(&wallpaper);
+        command.arg("--bg-fill").arg(wallpaper.path());
 
         let status = match command.status() {
             Ok(command) => command,
@@ -39,7 +39,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             return Err("feh failed".into());
         }
 
-        println!("Set X11 wallpaper to: {}", wallpaper.display());
+        println!("Set X11 wallpaper to: {}", wallpaper.path().display());
     } else {
         let status = match Command::new("awww")
             .args([
@@ -53,7 +53,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 "--transition-angle",
                 "135",
             ])
-            .arg(&wallpaper)
+            .arg(wallpaper.path())
             .status()
         {
             Ok(status) => status,
@@ -67,7 +67,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             return Err("awww failed".into());
         }
 
-        println!("Set Wayland wallpaper to: {}", wallpaper.display());
+        println!("Set Wayland wallpaper to: {}", wallpaper.path().display());
     }
 
     Ok(())
@@ -79,7 +79,7 @@ fn home_dir() -> Result<PathBuf, Box<dyn Error>> {
 }
 
 // Reservoir sampling - Algorithm R
-fn pick_random_wallpaper(dir: &Path) -> Result<Option<PathBuf>, Box<dyn Error>> {
+fn pick_random_wallpaper(dir: &Path) -> Result<Option<walkdir::DirEntry>, Box<dyn Error>> {
     // I investigated algorithm L, but for selecting only 1 element algorithm L is actually
     // less efficient than algorithm R (because of CPU floating point operations not inherently),
     // hence we keep algorithm R here.
@@ -92,13 +92,12 @@ fn pick_random_wallpaper(dir: &Path) -> Result<Option<PathBuf>, Box<dyn Error>> 
         // Filter using the borrowed DirEntry to avoid early allocations
         .filter(|entry| entry.file_type().is_file() && is_supported_image(entry.path()));
 
-    let mut chosen = None;
+    let mut chosen: Option<walkdir::DirEntry> = None;
 
     // Reservoir sampling for a single item
     for (i, entry) in candidates.enumerate() {
         if fastrand::usize(..=i) == 0 {
-            // Allocate the PathBuf ONLY when a file wins the reservoir slot
-            chosen = Some(entry.into_path());
+            chosen = Some(entry);
         }
     }
 
