@@ -1,6 +1,31 @@
-use std::env;
+//! # Shared Utils
+//!
+//! A collection of common utilities for path manipulation and environment 
+//! checking. This crate provides safe wrappers around system calls.
+//!
+//! ## Usage
+//! Add this to your `Cargo.toml`:
+//! ```toml
+//! [dependencies]
+//! shared = "0.1.0"
+//! ```
 
-/// Checks if a command executable exists in the system's PATH.
+use std::env;
+use std::error::Error;
+use std::path::PathBuf;
+
+
+/// Check if an OS command exists on the system.
+///
+/// # Examples
+///
+/// ```
+/// use shared::command_exists;
+///
+/// if !command_exists("dunstctl") {
+///     println!("dunstctl not available");
+/// }
+/// ```
 pub fn command_exists(cmd: &str) -> bool {
     let Some(paths) = env::var_os("PATH") else {
         return false;
@@ -38,6 +63,34 @@ pub fn command_exists(cmd: &str) -> bool {
     }
 
     false
+}
+
+
+/// Returns the path to the current user's home directory.
+///
+/// This function looks up the `HOME` environment variable. 
+///
+/// # Errors
+///
+/// Returns an error if:
+/// * The `HOME` environment variable is not set.
+/// * The value contains invalid Unicode (if using `var` instead of `var_os`).
+///
+/// # Examples
+///
+/// ```
+/// use shared::home_dir;
+/// use std::path::PathBuf;
+///
+/// // Note: This test might fail in environments without HOME set
+/// if let Ok(path) = home_dir() {
+///     println!("My home is at: {}", path.display());
+/// }
+/// ```
+pub fn home_dir() -> Result<PathBuf, Box<dyn Error>> {
+    let home = env::var_os("HOME").ok_or("HOME is not set")?;
+
+    Ok(PathBuf::from(home))
 }
 
 #[cfg(test)]

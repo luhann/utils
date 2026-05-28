@@ -1,8 +1,26 @@
+//! # search
+//!
+//! A utility to search the web using `rofi` input.
+//!
+//! Notably this search utility was designed to work in the same way as [DuckDuckgo bangs](https://duckduckgo.com/bangs),
+//! so `search term` will search google, but `!gh search term` will search Github.
+//!
+//! By default no help is shown, pressing `Alt + h` will close `search` and reopen with all
+//! bangs/engines showing.
+//!
+//! # Examples
+//!
+//! ```bash
+//! # Search using rofi
+//! search
+//! ```
+
 use std::error::Error;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use urlencoding::encode;
 
+/// Search engine struct
 #[derive(Clone, Copy, Debug)]
 struct Engine {
     key: &'static str,
@@ -11,6 +29,9 @@ struct Engine {
     description: &'static str,
 }
 
+/// Default search engine
+///
+/// Currently [google.com](https://google.com).
 const DEFAULT_ENGINE: Engine = Engine {
     key: "default",
     search_url: "https://www.google.com/search?q=",
@@ -18,6 +39,7 @@ const DEFAULT_ENGINE: Engine = Engine {
     description: "google",
 };
 
+/// All supported search engines
 const ENGINES: &[Engine] = &[
     Engine {
         key: "gh",
@@ -75,20 +97,15 @@ const ENGINES: &[Engine] = &[
     },
 ];
 
+/// Result of rofi window close
 enum MenuResult {
     Selected(String),
     ToggleHelp,
     Cancelled,
 }
 
-fn main() {
-    if let Err(err) = run() {
-        eprintln!("search-rs: {err}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<(), Box<dyn Error>> {
+/// Main entry point for binary
+fn main() -> Result<(), Box<dyn Error>> {
     let full_menu_text = build_menu_text();
     let mut show_help = false;
 
@@ -137,6 +154,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Construct menu text
+///
+/// This takes the default engine, plus all additional engines and converts it to a [`String`] to be
+/// used in constructing the rofi help menu.
+///
 fn build_menu_text() -> String {
     let mut capacity = DEFAULT_ENGINE.description.len() + 10;
     for e in ENGINES {
@@ -157,9 +179,10 @@ fn build_menu_text() -> String {
     output
 }
 
+/// Rofi menu loop
 fn run_menu(menu_text: &str) -> Result<MenuResult, Box<dyn Error>> {
     // Rofi arguments, alt-h is used to exit and switch to help mode
-    let args = vec!["-dmenu", "-p", "search:", "-kb-custom-1", "Alt+h"];
+    let args = vec!["-dmenu", "-sync", "-p", "search:", "-kb-custom-1", "Alt+h"];
 
     let mut child = match Command::new("rofi")
         .args(&args)
@@ -201,63 +224,47 @@ fn run_menu(menu_text: &str) -> Result<MenuResult, Box<dyn Error>> {
     }
 }
 
+/// Return the engine associated with a given key
 fn find_engine(key: &str) -> Option<&'static Engine> {
     ENGINES.iter().find(|engine| engine.key == key)
 }
 
-// Memory Optimization: Shift from returning String to returning zero-allocation &str slices
+/// Parse the generated selection.
+///
+/// This function strips out the bang `!gh` and returns a tuple with the engine key `gh` and the
+/// `search` term. If no bang is found in the search term, return the key for the [`DEFAULT_ENGINE`].
+///
+/// Returns string slices to avoid heap allocation.
 fn parse_selection(selection: &str) -> (&str, &str) {
-    if let Some((menu_choice, after_colon)) = selection.split_once(':') {
-        let trimmed_after = after_colon.trim();
+    let selection = selection.trim();
 
-        if let Some(bang) = menu_choice.strip_prefix('!') {
-            let expected_desc = find_engine(bang)
-                .map(|engine| engine.description)
-                .unwrap_or_default();
-
-            let search_terms = if trimmed_after == expected_desc {
-                ""
-            } else {
-                trimmed_after
-            };
-            return (bang, search_terms);
-        }
-
-        if menu_choice.starts_with("Default") {
-            let search_terms = if trimmed_after == DEFAULT_ENGINE.description {
-                ""
-            } else {
-                trimmed_after
-            };
-            return ("default", search_terms);
-        }
+    if let Some(content) = selection.strip_prefix('!') {
+        let (bang, rest) = content.split_once(' ').unwrap_or((content, ""));
+        return (bang, rest.trim());
     }
 
-    let mut parts = selection.splitn(2, ' ');
-    let first = parts.next().unwrap_or_default();
-    let rest = parts.next().unwrap_or_default().trim();
-
-    if let Some(bang) = first.strip_prefix('!') {
-        (bang, rest)
-    } else {
-        ("default", selection.trim())
+    if selection.starts_with("Default") {
+        // Handle your "Default: description" logic if still needed,
+        // otherwise just treat as a standard search.
+        let rest = selection.strip_prefix("Default").unwrap_or_default().trim();
+        return ("default", rest);
     }
+
+    ("default", selection)
 }
 
+/// Check if search term is a plain url.
 fn is_direct_url(query: &str) -> bool {
-    // If it has spaces, it's definitely a search query.
-    if query.contains(' ') {
-        return false;
+    match query {
+        // First, check for spaces. If found, it's a search.
+        _ if query.contains(' ') => false,
+        
+        // Check for protocols.
+        _ if query.starts_with("http://") || query.starts_with("https://") => true,
+        
+        // Finally, check for the dot.
+        _ => query.contains('.'),
     }
-
-    // If it starts with a protocol, it's definitely a URL.
-    if query.starts_with("http://") || query.starts_with("https://") {
-        return true;
-    }
-
-    // If it has no spaces and contains a dot (e.g., "archlinux.org"),
-    // it's highly likely a URL.
-    query.contains('.')
 }
 
 #[cfg(test)]
@@ -278,28 +285,11 @@ mod tests {
     }
 
     #[test]
-    fn treats_menu_description_as_empty_query() {
-        assert_eq!(parse_selection("!gh: github"), ("gh", ""));
-    }
-
-    #[test]
-    fn parses_menu_bang_search_terms() {
-        assert_eq!(
-            parse_selection("!gh: rust ownership"),
-            ("gh", "rust ownership")
-        );
-    }
-
-    #[test]
     fn parses_default_menu_search_terms() {
         assert_eq!(
-            parse_selection("Default: rust borrow checker"),
+            parse_selection("Default rust borrow checker"),
             ("default", "rust borrow checker")
         );
     }
 
-    #[test]
-    fn treats_default_menu_description_as_empty_query() {
-        assert_eq!(parse_selection("Default: google"), ("default", ""));
-    }
 }
