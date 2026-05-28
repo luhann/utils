@@ -157,6 +157,7 @@ name = "wallpaper"
 version = "0.1.0"
 dependencies = [
  "fastrand",
+ "shared",
  "walkdir",
 ]
 
@@ -187,6 +188,9 @@ dependencies = [
 [[package]]
 name = "writeback"
 version = "0.1.0"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "zmij"
