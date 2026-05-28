@@ -2,7 +2,7 @@
 set -eu
 
 RUNS="${1:-1000}"
-WARMUP="${2:-200}"
+WARMUP="${2:-500}"
 
 if ! command -v hyperfine >/dev/null 2>&1; then
   echo "hyperfine is not installed."
@@ -18,4 +18,4 @@ hyperfine \
   --warmup "$WARMUP" \
   --runs "$RUNS" \
   --shell=none \
-  'target/release/writeback'
+  'target/x86_64-unknown-linux-musl/release/writeback'

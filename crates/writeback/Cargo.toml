@@ -2,3 +2,7 @@
 name = "writeback"
 version = "0.1.0"
 edition = "2024"
+description = "A high-performance utility to monitor the system's 'Writeback' memory state via `/proc/meminfo`."
+
+[dependencies]
+memchr = "2.7"

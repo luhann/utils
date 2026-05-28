@@ -1,23 +1,34 @@
+//! # notifi
+//!
+//! A utility to monitor [dunst](https://github.com/dunst-project/dunst) status.
+//!
+//! By default it will return dunst status as json. Using the `--plain` option will return an icon
+//! depending on current dunst state.
+//!
+//! ## Examples
+//!
+//! ```fish
+//! # Print current dunst status.
+//! dunst
+//!
+//! # Print dunst status using a single icon.
+//! dunst --plain
+//! ```
 use serde_json::Value;
 use shared::command_exists;
 use std::env;
 use std::error::Error;
 use std::process::Command;
 
+/// Output format for dunstctl status
 enum OutputMode {
     Json,
     Plain,
     Auto,
 }
 
-fn main() {
-    if let Err(err) = run() {
-        eprintln!("Error: {err}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<(), Box<dyn Error>> {
+/// Main entry point for binary
+fn main() -> Result<(), Box<dyn Error>> {
     let output_mode = parse_output_mode()?;
 
     if !command_exists("dunstctl") {
@@ -72,6 +83,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+
+/// Run dunstctl with the given args
 fn run_dunstctl(args: &[&str]) -> Result<String, Box<dyn Error>> {
     let output = Command::new("dunstctl").args(args).output()?;
     if !output.status.success() {
@@ -80,6 +93,7 @@ fn run_dunstctl(args: &[&str]) -> Result<String, Box<dyn Error>> {
     Ok(String::from_utf8(output.stdout)?)
 }
 
+/// Get number of notifications in history
 fn history_count() -> Result<usize, Box<dyn Error>> {
     let history_raw = run_dunstctl(&["history"])?;
     let history_json: Value = serde_json::from_str(&history_raw)?;
@@ -92,6 +106,9 @@ fn history_count() -> Result<usize, Box<dyn Error>> {
     Ok(count)
 }
 
+/// Parse the dunst output to supported formats
+///
+/// Currently only `json` and `plain text` output are supported.
 fn parse_output_mode() -> Result<OutputMode, Box<dyn Error>> {
     let mut output_mode = OutputMode::Auto;
 

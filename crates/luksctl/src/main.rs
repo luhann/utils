@@ -1,75 +1,49 @@
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn parses_valid_actions() {
-        assert!(matches!(parse_action("open").unwrap(), Action::Open));
-        assert!(matches!(parse_action("close").unwrap(), Action::Close));
-        assert!(matches!(parse_action("status").unwrap(), Action::Status));
-    }
-
-    #[test]
-    fn errors_on_invalid_action() {
-        assert!(parse_action("foo").is_err());
-    }
-
-    #[test]
-    fn luks_name_from_path_strips_suffix() {
-        let path = PathBuf::from("/tmp/secret.luks");
-        assert_eq!(luks_name_from_path(&path).unwrap(), "secret");
-    }
-
-    #[test]
-    fn luks_name_from_path_no_suffix() {
-        let path = PathBuf::from("/tmp/secretfile");
-        assert_eq!(luks_name_from_path(&path).unwrap(), "secretfile");
-    }
-
-    #[test]
-    fn luks_name_from_path_errors_on_invalid() {
-        let path = PathBuf::from("");
-        assert!(luks_name_from_path(&path).is_err());
-    }
-}
-use shared::command_exists;
+use shared::{command_exists, home_dir};
 use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// Sub-command enum
 enum Action {
     Open,
     Close,
     Status,
 }
 
+/// Privilege Escalation Runner
 enum PrivilegeRunner {
     Sudo,
     Run0,
     None,
 }
 
-fn main() {
-    if let Err(err) = run() {
-        eprintln!("Error: {err}");
-        std::process::exit(1);
-    }
-}
+/// Help menu
+const USAGE: &str = concat!(
+    "Usage: {program} (open|close|status) /path/to/luks_file [mount_point]\n",
+    "\n",
+    "Commands:\n",
+    "  open    - Open and mount LUKS container\n",
+    "  close   - Unmount and close LUKS container\n",
+    "  status  - Show status of LUKS container\n",
+    "\n",
+    "Arguments:\n",
+    "  luks_file    - Path to LUKS container file\n",
+    "  mount_point  - Optional custom mount point (default: ~/container_name)\n",
+);
 
-fn run() -> Result<(), Box<dyn Error>> {
+/// Main entry point for binary
+fn main()  -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
-    let program = args.first().map(String::as_str).unwrap_or("luksctl");
 
     if args.len() == 1 || args[1] == "-h" || args[1] == "--help" {
-        show_usage(program);
+        println!("{}", USAGE);
         return Ok(());
     }
 
     if args.len() < 3 {
-        show_usage(program);
+        println!("{}", USAGE);
         return Err("Insufficient arguments".into());
     }
 
@@ -95,19 +69,37 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn show_usage(program: &str) {
-    println!("Usage: {program} (open|close|status) /path/to/luks_file [mount_point]");
-    println!();
-    println!("Commands:");
-    println!("  open    - Open and mount LUKS container");
-    println!("  close   - Unmount and close LUKS container");
-    println!("  status  - Show status of LUKS container");
-    println!();
-    println!("Arguments:");
-    println!("  luks_file    - Path to LUKS container file");
-    println!("  mount_point  - Optional custom mount point (default: ~/container_name)");
+/// Check which privilege escalation command to use
+///
+/// Prefer `sudo` if it is installed otherwise use `run0`.
+fn detect_privilege_runner() -> PrivilegeRunner {
+    if command_exists("sudo") {
+        PrivilegeRunner::Sudo
+    } else if command_exists("run0") {
+        PrivilegeRunner::Run0
+    } else {
+        PrivilegeRunner::None
+    }
 }
 
+/// Construct privileged_command
+fn privileged_command(privilege_runner: &PrivilegeRunner, program: &str) -> Command {
+    match privilege_runner {
+        PrivilegeRunner::Sudo => {
+            let mut command = Command::new("sudo");
+            command.arg(program);
+            command
+        }
+        PrivilegeRunner::Run0 => {
+            let mut command = Command::new("run0");
+            command.arg(program);
+            command
+        }
+        PrivilegeRunner::None => Command::new(program),
+    }
+}
+
+/// Parse arguments to determine action
 fn parse_action(action: &str) -> Result<Action, Box<dyn Error>> {
     match action {
         "open" => Ok(Action::Open),
@@ -117,6 +109,7 @@ fn parse_action(action: &str) -> Result<Action, Box<dyn Error>> {
     }
 }
 
+/// Generate a name for the given luks file
 fn luks_name_from_path(luks_file: &Path) -> Result<String, Box<dyn Error>> {
     let file_name = luks_file
         .file_name()
@@ -129,6 +122,7 @@ fn luks_name_from_path(luks_file: &Path) -> Result<String, Box<dyn Error>> {
         .to_owned())
 }
 
+/// Check status of given luks container
 fn status(luks_file: &Path, luks_name: &str, mount_point: &Path) -> Result<(), Box<dyn Error>> {
     println!("LUKS Container: {}", luks_file.display());
     println!("Device Name: {luks_name}");
@@ -152,6 +146,10 @@ fn status(luks_file: &Path, luks_name: &str, mount_point: &Path) -> Result<(), B
     Ok(())
 }
 
+/// Open a luks container
+///
+/// Mount the given luks container at the given `mount_point` by default it mounts the container in
+/// the user's home_dir.
 fn open_luks(
     luks_file: &Path,
     luks_name: &str,
@@ -238,6 +236,9 @@ fn open_luks(
     Ok(())
 }
 
+/// Close the given luks container
+///
+/// Also removes the `mount_point` after closing the container.
 fn close_luks(
     luks_file: &Path,
     luks_name: &str,
@@ -284,6 +285,7 @@ fn close_luks(
     Ok(())
 }
 
+/// Check if a file is luks encrypted
 fn is_luks_encrypted(device: &Path) -> Result<bool, Box<dyn Error>> {
     let status = Command::new("cryptsetup")
         .arg("isLuks")
@@ -295,10 +297,12 @@ fn is_luks_encrypted(device: &Path) -> Result<bool, Box<dyn Error>> {
     Ok(status.success())
 }
 
+/// Check if the luks file is open
 fn is_device_open(luks_name: &str) -> bool {
     Path::new("/dev/mapper").join(luks_name).exists()
 }
 
+/// Check if the luks file is mounted 
 fn is_mounted(mount_point: &Path) -> bool {
     let Ok(mounts) = fs::read_to_string("/proc/mounts") else {
         return false;
@@ -316,6 +320,7 @@ fn is_mounted(mount_point: &Path) -> bool {
     })
 }
 
+/// Get available space in the given `mount_point`
 fn df_last_line(mount_point: &Path) -> Result<Option<String>, Box<dyn Error>> {
     let output = Command::new("df")
         .arg("-h")
@@ -336,33 +341,27 @@ fn df_last_line(mount_point: &Path) -> Result<Option<String>, Box<dyn Error>> {
         .map(ToOwned::to_owned))
 }
 
-fn detect_privilege_runner() -> PrivilegeRunner {
-    if command_exists("sudo") {
-        PrivilegeRunner::Sudo
-    } else if command_exists("run0") {
-        PrivilegeRunner::Run0
-    } else {
-        PrivilegeRunner::None
-    }
-}
 
-fn privileged_command(privilege_runner: &PrivilegeRunner, program: &str) -> Command {
-    match privilege_runner {
-        PrivilegeRunner::Sudo => {
-            let mut command = Command::new("sudo");
-            command.arg(program);
-            command
-        }
-        PrivilegeRunner::Run0 => {
-            let mut command = Command::new("run0");
-            command.arg(program);
-            command
-        }
-        PrivilegeRunner::None => Command::new(program),
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
 
-fn home_dir() -> Result<PathBuf, Box<dyn Error>> {
-    let home = env::var_os("HOME").ok_or("HOME is not set")?;
-    Ok(PathBuf::from(home))
+    #[test]
+    fn luks_name_from_path_strips_suffix() {
+        let path = PathBuf::from("/tmp/secret.luks");
+        assert_eq!(luks_name_from_path(&path).unwrap(), "secret");
+    }
+
+    #[test]
+    fn luks_name_from_path_no_suffix() {
+        let path = PathBuf::from("/tmp/secretfile");
+        assert_eq!(luks_name_from_path(&path).unwrap(), "secretfile");
+    }
+
+    #[test]
+    fn luks_name_from_path_errors_on_invalid() {
+        let path = PathBuf::from("");
+        assert!(luks_name_from_path(&path).is_err());
+    }
 }

@@ -1,18 +1,27 @@
+//! # backlight
+//!
+//! A utility to control external monitor brightness through `ddcutil`.
+//!
+//! # Examples
+//!
+//! ```fish
+//! backlight 10
+//!
+//! # or
+//!
+//! backlight 10 25
+//! ```
 use std::env;
 use std::error::Error;
 use std::process::Command;
 
+/// Minimum screen brightness.
 const MIN_BRIGHTNESS: u8 = 0;
+/// Maximum screen brightness.
 const MAX_BRIGHTNESS: u8 = 100;
 
-fn main() {
-    if let Err(err) = run() {
-        eprintln!("Error: {err}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<(), Box<dyn Error>> {
+/// Main entry point for binary.
+fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.as_slice() {
         [b1] => set_brightness(b1, b1),
@@ -26,6 +35,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
 }
 
+/// Set brightness on two monitors.
+///
+/// **Note:** Currently this function assumes that you are using a two monitor setup.
+///
 fn set_brightness(b1: &str, b2: &str) -> Result<(), Box<dyn Error>> {
     let brightness_display_1 = parse_brightness(b1, "brightness")?.to_string();
     let brightness_display_2 = parse_brightness(b2, "brightness")?.to_string();
@@ -42,6 +55,11 @@ fn set_brightness(b1: &str, b2: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Spawn ddcutil
+///
+/// Change the brightness on the provided display with the given brightness value.
+/// `--skip-ddc-checks` and --enable-dynamic-sleep` are options that experimentally appear to
+/// provide the best balance between speed and correctness.
 fn spawn_ddcutil(display: &str, brightness: &str) -> Result<std::process::Child, Box<dyn Error>> {
     let child = Command::new("ddcutil")
         .args([
@@ -58,6 +76,10 @@ fn spawn_ddcutil(display: &str, brightness: &str) -> Result<std::process::Child,
     Ok(child)
 }
 
+/// Parse brightness value.
+///
+/// Makes sure that brightness can be converted to [`u8`], and that provided brightness is between 0
+/// and 100.
 fn parse_brightness(raw: &str, arg_name: &str) -> Result<u8, Box<dyn Error>> {
     let parsed: u8 = raw.parse().map_err(|_| {
         format!("{arg_name} must be an integer between {MIN_BRIGHTNESS} and {MAX_BRIGHTNESS}")
