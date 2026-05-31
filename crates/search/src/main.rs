@@ -258,10 +258,10 @@ fn is_direct_url(query: &str) -> bool {
     match query {
         // First, check for spaces. If found, it's a search.
         _ if query.contains(' ') => false,
-        
+
         // Check for protocols.
         _ if query.starts_with("http://") || query.starts_with("https://") => true,
-        
+
         // Finally, check for the dot.
         _ => query.contains('.'),
     }
@@ -291,5 +291,4 @@ mod tests {
             ("default", "rust borrow checker")
         );
     }
-
 }

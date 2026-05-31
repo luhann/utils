@@ -146,7 +146,7 @@ fn pick_random_wallpaper(dir: &Path) -> Result<Option<walkdir::DirEntry>, Box<dy
 fn is_supported_image(entry: &walkdir::DirEntry) -> bool {
     let name = entry.file_name();
     let bytes = name.as_encoded_bytes();
-    
+
     // Scan backwards from the end of the filename bytes for the dot
     if let Some(dot_idx) = bytes.iter().rposition(|&b| b == b'.') {
         let ext = &bytes[dot_idx + 1..];

@@ -1,6 +1,6 @@
 //! # Shared Utils
 //!
-//! A collection of common utilities for path manipulation and environment 
+//! A collection of common utilities for path manipulation and environment
 //! checking. This crate provides safe wrappers around system calls.
 //!
 //! ## Usage
@@ -13,7 +13,6 @@
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
-
 
 /// Check if an OS command exists on the system.
 ///
@@ -65,10 +64,9 @@ pub fn command_exists(cmd: &str) -> bool {
     false
 }
 
-
 /// Returns the path to the current user's home directory.
 ///
-/// This function looks up the `HOME` environment variable. 
+/// This function looks up the `HOME` environment variable.
 ///
 /// # Errors
 ///

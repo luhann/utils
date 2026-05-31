@@ -34,7 +34,7 @@ const USAGE: &str = concat!(
 );
 
 /// Main entry point for binary
-fn main()  -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() == 1 || args[1] == "-h" || args[1] == "--help" {
@@ -302,7 +302,7 @@ fn is_device_open(luks_name: &str) -> bool {
     Path::new("/dev/mapper").join(luks_name).exists()
 }
 
-/// Check if the luks file is mounted 
+/// Check if the luks file is mounted
 fn is_mounted(mount_point: &Path) -> bool {
     let Ok(mounts) = fs::read_to_string("/proc/mounts") else {
         return false;
@@ -340,7 +340,6 @@ fn df_last_line(mount_point: &Path) -> Result<Option<String>, Box<dyn Error>> {
         .rfind(|line| !line.is_empty())
         .map(ToOwned::to_owned))
 }
-
 
 #[cfg(test)]
 mod tests {
