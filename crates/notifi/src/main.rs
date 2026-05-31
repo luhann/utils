@@ -9,32 +9,74 @@
 //!
 //! ```fish
 //! # Print current dunst status.
-//! dunst
+//! notifi
 //!
 //! # Print dunst status using a single icon.
-//! dunst --plain
+//! notifi --plain
+//!
+//! # Run as a daemon for Waybar
+//! notifi --daemon
 //! ```
 use serde_json::Value;
 use shared::command_exists;
 use std::env;
 use std::error::Error;
+use std::io::{self, Write};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 /// Output format for dunstctl status
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum OutputMode {
     Json,
     Plain,
     Auto,
 }
 
+/// Configuration parsed from CLI arguments
+#[derive(Debug, PartialEq)]
+struct Config {
+    output_mode: OutputMode,
+    daemon: bool,
+    interval: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            output_mode: OutputMode::Auto,
+            daemon: false,
+            interval: 2, // Default polling interval of 2 seconds
+        }
+    }
+}
+
 /// Main entry point for binary
 fn main() -> Result<(), Box<dyn Error>> {
-    let output_mode = parse_output_mode()?;
+    let config = parse_args()?;
 
     if !command_exists("dunstctl") {
         return Err("dunstctl not available".into());
     }
 
+    if config.daemon {
+        loop {
+            if let Err(e) = print_status(&config.output_mode) {
+                eprintln!("Error fetching dunst status: {e}");
+            }
+            // Use the parsed interval here!
+            thread::sleep(Duration::from_secs(config.interval as u64));
+        }
+    } else {
+        print_status(&config.output_mode)?;
+    }
+
+    Ok(())
+}
+
+/// Fetches current dunst state and prints it to stdout
+fn print_status(output_mode: &OutputMode) -> Result<(), Box<dyn Error>> {
     let is_paused = run_dunstctl(&["is-paused"])?.trim() == "true";
     let waiting_count: u64 = run_dunstctl(&["count", "waiting"])?
         .trim()
@@ -80,9 +122,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("{}", text);
     }
 
+    // CRITICAL: Force Rust to push the line through the pipe to Waybar immediately
+    io::stdout().flush()?;
     Ok(())
 }
-
 
 /// Run dunstctl with the given args
 fn run_dunstctl(args: &[&str]) -> Result<String, Box<dyn Error>> {
@@ -106,29 +149,41 @@ fn history_count() -> Result<usize, Box<dyn Error>> {
     Ok(count)
 }
 
-/// Parse the dunst output to supported formats
-///
-/// Currently only `json` and `plain text` output are supported.
-fn parse_output_mode() -> Result<OutputMode, Box<dyn Error>> {
-    let mut output_mode = OutputMode::Auto;
+/// Parse arguments into a Config struct
+fn parse_args() -> Result<Config, Box<dyn Error>> {
+    let mut config = Config::default();
 
-    for arg in env::args().skip(1) {
+    // We use into_iter() and a while loop so we can consume extra arguments
+    // when we hit a flag that requires a value (like --interval)
+    let mut args = env::args().skip(1);
+
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--json" => {
-                if matches!(output_mode, OutputMode::Plain) {
+                if matches!(config.output_mode, OutputMode::Plain) {
                     return Err("cannot combine --json and --plain".into());
                 }
-                output_mode = OutputMode::Json;
+                config.output_mode = OutputMode::Json;
             }
             "--plain" => {
-                if matches!(output_mode, OutputMode::Json) {
+                if matches!(config.output_mode, OutputMode::Json) {
                     return Err("cannot combine --json and --plain".into());
                 }
-                output_mode = OutputMode::Plain;
+                config.output_mode = OutputMode::Plain;
+            }
+            "-d" | "--daemon" => {
+                config.daemon = true;
+            }
+            "-i" | "--interval" => {
+                let next_arg = args.next().ok_or("expected value for --interval")?;
+                let interval: usize = next_arg
+                    .parse()
+                    .map_err(|_| "interval must be a positive integer")?;
+                config.interval = interval;
             }
             "-h" | "--help" => {
                 println!(
-                    "Usage: notifi [--json|--plain]\n\n  --json   Force Waybar JSON output\n  --plain  Force Polybar plain-text output"
+                    "Usage: notifi [OPTIONS]\n\nOptions:\n  --json             Force Waybar JSON output\n  --plain            Force Polybar plain-text output\n  -d, --daemon       Run continuously as a daemon\n  -i, --interval <N> Polling interval in seconds (default: 2)"
                 );
                 std::process::exit(0);
             }
@@ -136,7 +191,7 @@ fn parse_output_mode() -> Result<OutputMode, Box<dyn Error>> {
         }
     }
 
-    Ok(output_mode)
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -145,58 +200,86 @@ mod tests {
 
     #[test]
     fn parses_json_flag() {
-        assert!(matches!(
-            parse_output_mode_from_args(["--json"]).unwrap(),
-            OutputMode::Json
-        ));
+        let config = parse_args_from_args(&["--json"]).unwrap();
+        assert_eq!(config.output_mode, OutputMode::Json);
+        assert!(!config.daemon);
     }
 
     #[test]
     fn parses_plain_flag() {
-        assert!(matches!(
-            parse_output_mode_from_args(["--plain"]).unwrap(),
-            OutputMode::Plain
-        ));
+        let config = parse_args_from_args(&["--plain"]).unwrap();
+        assert_eq!(config.output_mode, OutputMode::Plain);
+        assert!(!config.daemon);
+    }
+
+    #[test]
+    fn parses_daemon_flag() {
+        let config = parse_args_from_args(&["--daemon"]).unwrap();
+        assert!(config.daemon);
+    }
+
+    #[test]
+    fn parses_interval() {
+        let config = parse_args_from_args(&["--interval", "5"]).unwrap();
+        assert_eq!(config.interval, 5);
     }
 
     #[test]
     fn errors_on_both_flags() {
-        assert!(parse_output_mode_from_args(["--json", "--plain"]).is_err());
-        assert!(parse_output_mode_from_args(["--plain", "--json"]).is_err());
+        assert!(parse_args_from_args(&["--json", "--plain"]).is_err());
+        assert!(parse_args_from_args(&["--plain", "--json"]).is_err());
+    }
+
+    #[test]
+    fn errors_on_missing_interval_value() {
+        assert!(parse_args_from_args(&["--interval"]).is_err());
+    }
+
+    #[test]
+    fn errors_on_invalid_interval_value() {
+        assert!(parse_args_from_args(&["--interval", "foo"]).is_err());
     }
 
     #[test]
     fn errors_on_unknown_flag() {
-        assert!(parse_output_mode_from_args(["--foo"]).is_err());
+        assert!(parse_args_from_args(&["--foo"]).is_err());
     }
 
-    // Helper for testing: mimic parse_output_mode but take args as slice
-    fn parse_output_mode_from_args<const N: usize>(
-        args: [&str; N],
-    ) -> Result<OutputMode, Box<dyn std::error::Error>> {
-        let mut output_mode = OutputMode::Auto;
-        for arg in args.iter() {
+    // Helper for testing: mimic parse_args but take args as a slice
+    fn parse_args_from_args(args: &[&str]) -> Result<Config, Box<dyn std::error::Error>> {
+        let mut config = Config::default();
+        let mut args_iter = args.iter();
+
+        while let Some(arg) = args_iter.next() {
             match *arg {
                 "--json" => {
-                    if matches!(output_mode, OutputMode::Plain) {
+                    if matches!(config.output_mode, OutputMode::Plain) {
                         return Err("cannot combine --json and --plain".into());
                     }
-                    output_mode = OutputMode::Json;
+                    config.output_mode = OutputMode::Json;
                 }
                 "--plain" => {
-                    if matches!(output_mode, OutputMode::Json) {
+                    if matches!(config.output_mode, OutputMode::Json) {
                         return Err("cannot combine --json and --plain".into());
                     }
-                    output_mode = OutputMode::Plain;
+                    config.output_mode = OutputMode::Plain;
+                }
+                "-d" | "--daemon" => {
+                    config.daemon = true;
+                }
+                "-i" | "--interval" => {
+                    let next_arg = args_iter.next().ok_or("expected value for --interval")?;
+                    let interval: usize = next_arg
+                        .parse()
+                        .map_err(|_| "interval must be a positive integer")?;
+                    config.interval = interval;
                 }
                 "-h" | "--help" => {
-                    return Ok(output_mode);
+                    return Ok(config);
                 }
-                _ => {
-                    return Err(format!("unknown argument: {arg}").into());
-                }
+                _ => return Err(format!("unknown argument: {arg}").into()),
             }
         }
-        Ok(output_mode)
+        Ok(config)
     }
 }

@@ -12,108 +12,152 @@
 //! # Print current writeback size in human-readable format
 //! writeback
 //!
-//! # Only exit with error if writeback is less than 500MB, otherwise stay silent
-//! writeback --min-mb 500 --quiet
+//! # Run continuously as a daemon updating every 1 second (Perfect for Waybar)
+//! writeback --daemon --interval 1
 //! ```
 use std::fs::File;
-use std::io;
+use std::io::{self, Write};
+use std::thread;
+use std::time::Duration;
 
 use memchr::memmem;
 
 /// Minimal CLI options for binary.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, PartialEq)]
 struct CliOptions {
     min_mb: Option<f64>,
     quiet: bool,
+    daemon: bool,
+    interval: u64,
+}
+
+impl Default for CliOptions {
+    fn default() -> Self {
+        CliOptions {
+            min_mb: None,
+            quiet: false,
+            daemon: false,
+            interval: 2, // Default polling interval of 2 seconds
+        }
+    }
 }
 
 /// Display command help options.
 const USAGE: &str = concat!(
-    "Usage: writeback [--min-mb <MB>] [--quiet]\n\n",
-    "  --min-mb <MB>   Exit with status 0 only when writeback is >= MB\n",
-    "  --quiet         Suppress normal output (useful with --min-mb)\n",
-    "  -h, --help      Show this help"
+    "Usage: writeback [--min-mb <MB>] [--quiet] [--daemon] [--interval <seconds>]\n\n",
+    "  --min-mb <MB>      Exit with status 0 (or print nothing in daemon mode) only when writeback is >= MB\n",
+    "  --quiet, -q        Suppress normal output (useful with --min-mb)\n",
+    "  --daemon, -d       Run continuously as a daemon (ideal for Waybar streaming)\n",
+    "  --interval, -i <S> Polling interval in seconds for daemon mode (default: 2)\n",
+    "  -h, --help         Show this help"
 );
 
 /// Main entry point for binary
 fn main() {
-    let options = match parse_cli_args(std::env::args().skip(1)) {
+    let options = match parse_cli_args(std::env::args_os().skip(1)) {
         Ok(value) => value,
         Err(err) => {
-            eprintln!("{err}\n\n{}", USAGE);
+            eprintln!("Error: {err}\n\n{}", USAGE);
             std::process::exit(2);
         }
     };
 
-    let file = File::open("/proc/meminfo").unwrap_or_else(|e| {
-        eprintln!("Error reading file: {e}");
-        std::process::exit(1);
-    });
+    loop {
+        let file = match File::open("/proc/meminfo") {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Error reading file: {e}");
+                if options.daemon {
+                    thread::sleep(Duration::from_secs(options.interval));
+                    continue;
+                } else {
+                    std::process::exit(1);
+                }
+            }
+        };
 
-    // Pass the raw File descriptor directly.
-    //
-    // We bypass [`std::io::BufReader`] because `/proc` files are pseudo-files;
-    // the kernel generates the content on `read()`. A single 4KB read is
-    // atomic and sufficient for `meminfo`, making additional buffering redundant.
-    let size_kb = match parse_writeback_kb(file) {
-        Ok(value) => value,
-        Err(e) => {
-            let msg = match e.kind() {
-                io::ErrorKind::OutOfMemory => "/proc/meminfo exceeded the 2KB buffer ceiling",
-                io::ErrorKind::NotFound => "Writeback entry not found",
-                _ => "Unknown I/O error",
-            };
-            eprintln!("Error parsing meminfo: {msg}");
-            std::process::exit(1);
+        // Pass the raw File descriptor directly.
+        let size_kb = match parse_writeback_kb(file) {
+            Ok(value) => value,
+            Err(e) => {
+                let msg = match e.kind() {
+                    io::ErrorKind::OutOfMemory => "/proc/meminfo exceeded the 2KB buffer ceiling",
+                    io::ErrorKind::NotFound => "Writeback entry not found",
+                    _ => "Unknown I/O error",
+                };
+                eprintln!("Error parsing meminfo: {msg}");
+                if options.daemon {
+                    thread::sleep(Duration::from_secs(options.interval));
+                    continue;
+                } else {
+                    std::process::exit(1);
+                }
+            }
+        };
+
+        let mut threshold_met = true;
+        if let Some(min_mb) = options.min_mb {
+            let size_mb = size_kb as f64 / 1024.0;
+
+            if size_mb < min_mb {
+                if options.daemon {
+                    threshold_met = false;
+                    // Print an empty line to clear the Waybar module layout
+                    println!();
+                    let _ = io::stdout().flush();
+                } else {
+                    std::process::exit(1);
+                }
+            }
         }
-    };
 
-    if let Some(min_mb) = options.min_mb {
-        let size_mb = size_kb as f64 / 1024.0;
-
-        if size_mb < min_mb {
-            std::process::exit(1);
+        if threshold_met && !options.quiet {
+            if size_kb >= 1048576 {
+                println!("{:.1} GB", size_kb as f64 / 1048576.0);
+            } else if size_kb >= 1024 {
+                println!("{:.1} MB", size_kb as f64 / 1024.0);
+            } else {
+                println!("{} kB", size_kb);
+            }
+            // Vital for Waybar modules to receive updates instantly over pipes
+            let _ = io::stdout().flush();
         }
-    }
 
-    if options.quiet {
-        return;
-    }
+        // If daemon mode is disabled, exit the loop immediately (Exit Status 0)
+        if !options.daemon {
+            break;
+        }
 
-    if size_kb >= 1048576 {
-        println!("{:.1} GB", size_kb as f64 / 1048576.0);
-    } else if size_kb >= 1024 {
-        println!("{:.1} MB", size_kb as f64 / 1024.0);
-    } else {
-        println!("{} kB", size_kb);
+        thread::sleep(Duration::from_secs(options.interval));
     }
 }
 
 /// Parses command-line arguments into structured [`CliOptions`].
-/// 
-/// # Errors
-/// Returns an `Err` if an unknown flag is passed or if `--min-mb` is given
-/// a non-numeric or negative value.
-fn parse_cli_args<I>(args: I) -> Result<CliOptions, String>
+fn parse_cli_args<I>(args: I) -> Result<CliOptions, std::borrow::Cow<'static, str>>
 where
-    I: IntoIterator<Item = String>,
+    I: IntoIterator<Item = std::ffi::OsString>,
 {
     let mut options = CliOptions::default();
     let mut iter = args.into_iter();
 
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
+    while let Some(arg_os) = iter.next() {
+        // Convert to &str cleanly without allocating.
+        // Non-UTF8 arguments are safely treated as unknown arguments.
+        let arg = arg_os.to_str().unwrap_or("");
+
+        match arg {
             "--min-mb" => {
-                let Some(value) = iter.next() else {
-                    return Err("--min-mb requires a numeric value".to_string());
+                let Some(value_os) = iter.next() else {
+                    return Err("--min-mb requires a numeric value".into());
                 };
+                let value = value_os.to_str().unwrap_or("");
 
                 let parsed = value
                     .parse::<f64>()
                     .map_err(|_| format!("invalid --min-mb value: {value}"))?;
 
                 if parsed.is_sign_negative() {
-                    return Err("--min-mb must be non-negative".to_string());
+                    return Err("--min-mb must be non-negative".into());
                 }
 
                 options.min_mb = Some(parsed);
@@ -121,12 +165,28 @@ where
             "--quiet" | "-q" => {
                 options.quiet = true;
             }
+            "--daemon" | "-d" => {
+                options.daemon = true;
+            }
+            "--interval" | "-i" => {
+                let Some(value_os) = iter.next() else {
+                    return Err("--interval requires a numeric value".into());
+                };
+                let value = value_os.to_str().unwrap_or("");
+
+                let parsed = value
+                    .parse::<u64>()
+                    .map_err(|_| format!("invalid --interval value: {value}"))?;
+
+                options.interval = parsed;
+            }
             "--help" | "-h" => {
                 println!("{}", USAGE);
                 std::process::exit(0);
             }
             _ => {
-                return Err(format!("unknown argument: {arg}"));
+                // Safely lossy-decode unknown arguments for the error message
+                return Err(format!("unknown argument: {}", arg_os.to_string_lossy()).into());
             }
         }
     }
@@ -136,12 +196,12 @@ where
 
 /// Extracts the `Writeback` value from a `/proc/meminfo` stream.
 ///
-/// This implementation performs a single-pass scan over a 4KB stack buffer to avoid 
+/// This implementation performs a single-pass scan over a 2KB stack buffer to avoid 
 /// heap allocations and `BufReader` overhead. 
 ///
 /// # Performance
-/// - **Memory**: Uses a fixed `4096` byte array on the stack.
-/// - **Time**: O(n) where `n` is the bytes read (capped at 4KB).
+/// - **Memory**: Uses a fixed `2048` byte array on the stack.
+/// - **Time**: O(n) where `n` is the bytes read (capped at 2KB).
 ///
 /// # Errors
 /// - `io::ErrorKind::NotFound`: If the "Writeback:" key isn't found in the first 4KB.
@@ -153,34 +213,25 @@ where
 /// assert_eq!(val, 1024);
 /// ```
 fn parse_writeback_kb<R: io::Read>(mut reader: R) -> io::Result<u64> {
-    // [0u8; 2048] forces the CPU to zero out 4KB of stack memory on every function call.
-    let mut buffer = [0u8; 2048]; 
+    let mut buffer = [0u8; 2048];
     let bytes_read = reader.read(&mut buffer)?;
     let data = &buffer[..bytes_read];
 
     let needle = b"Writeback:";
     if let Some(idx) = memmem::find(data, needle) {
-        // Slice the data to right after "Writeback:"
         let rest = &data[idx + needle.len()..];
-
-        // Vectorized space skipping.
-        // Using `.position()` allows LLVM to heavily optimize or even vectorize 
-        // the scan for the first non-space character.
         let start_of_digits = rest.iter().position(|&b| b != b' ').unwrap_or(rest.len());
         let digit_data = &rest[start_of_digits..];
 
         let mut value = 0u64;
         let mut found_digit = false;
 
-        // Zero-cost iteration without bounds checking.
-        // Iterating over a direct sub-slice slice (`&b in digit_data`) completely
-        // removes the need for an index variable and strips out all internal bounds checks.
         for &b in digit_data {
             if b.is_ascii_digit() {
                 value = value * 10 + (b - b'0') as u64;
                 found_digit = true;
             } else {
-                break; // Met a non-digit (e.g., the space before "kB"), stop parsing.
+                break;
             }
         }
 
@@ -196,7 +247,6 @@ fn parse_writeback_kb<R: io::Read>(mut reader: R) -> io::Result<u64> {
     Err(io::ErrorKind::NotFound.into())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{CliOptions, parse_cli_args, parse_writeback_kb};
@@ -206,7 +256,6 @@ mod tests {
     fn parses_writeback_value() {
         let data = "MemTotal: 16384 kB\nWriteback: 2048 kB\n";
         let result = parse_writeback_kb(Cursor::new(data)).unwrap();
-
         assert_eq!(result, 2048);
     }
 
@@ -214,17 +263,16 @@ mod tests {
     fn errors_when_writeback_missing() {
         let data = "MemTotal: 16384 kB\n";
         let result = parse_writeback_kb(Cursor::new(data));
-
         assert!(result.is_err());
     }
 
     #[test]
     fn parses_min_mb_and_quiet_args() {
-        let args = vec![
-            "--min-mb".to_string(),
-            "50".to_string(),
-            "--quiet".to_string(),
-        ];
+        // Map native strings into OsString for the new zero-copy signature
+        let args = vec!["--min-mb", "50", "--quiet"]
+            .into_iter()
+            .map(std::ffi::OsString::from);
+
         let result = parse_cli_args(args).unwrap();
 
         assert_eq!(
@@ -232,15 +280,38 @@ mod tests {
             CliOptions {
                 min_mb: Some(50.0),
                 quiet: true,
+                daemon: false,
+                interval: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_daemon_and_interval_args() {
+        let args = vec!["--daemon", "--interval", "5"]
+            .into_iter()
+            .map(std::ffi::OsString::from);
+
+        let result = parse_cli_args(args).unwrap();
+
+        assert_eq!(
+            result,
+            CliOptions {
+                min_mb: None,
+                quiet: false,
+                daemon: true,
+                interval: 5,
             }
         );
     }
 
     #[test]
     fn errors_on_invalid_min_mb() {
-        let args = vec!["--min-mb".to_string(), "abc".to_string()];
-        let result = parse_cli_args(args);
+        let args = vec!["--min-mb", "abc"]
+            .into_iter()
+            .map(std::ffi::OsString::from);
 
+        let result = parse_cli_args(args);
         assert!(result.is_err());
     }
 }
