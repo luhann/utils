@@ -18,7 +18,17 @@
 use std::error::Error;
 use std::io::Write;
 use std::process::{Command, Stdio};
+
+use clap::Parser;
 use urlencoding::encode;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about = "A utility to search the web using rofi input.", long_about = None)]
+struct Args {
+    /// Start with engine help entries shown in rofi
+    #[arg(long, default_value_t = false)]
+    help_menu: bool,
+}
 
 /// Search engine struct
 #[derive(Clone, Copy, Debug)]
@@ -106,8 +116,9 @@ enum MenuResult {
 
 /// Main entry point for binary
 fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
     let full_menu_text = build_menu_text();
-    let mut show_help = false;
+    let mut show_help = args.help_menu;
 
     let selection = loop {
         let menu_text = if show_help { &full_menu_text } else { "" };
@@ -269,7 +280,8 @@ fn is_direct_url(query: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_selection;
+    use super::{Args, parse_selection};
+    use clap::Parser;
 
     #[test]
     fn parses_direct_bang_command() {
@@ -290,5 +302,17 @@ mod tests {
             parse_selection("Default rust borrow checker"),
             ("default", "rust borrow checker")
         );
+    }
+
+    #[test]
+    fn parses_help_menu_flag() {
+        let args = Args::try_parse_from(["search", "--help-menu"]).unwrap();
+        assert!(args.help_menu);
+    }
+
+    #[test]
+    fn defaults_help_menu_to_false() {
+        let args = Args::try_parse_from(["search"]).unwrap();
+        assert!(!args.help_menu);
     }
 }

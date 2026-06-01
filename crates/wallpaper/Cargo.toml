@@ -1,9 +1,10 @@
 [package]
 name = "wallpaper"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2024"
 
 [dependencies]
+clap = { version = "4.4", features = ["derive"] }
 shared = {path = "../shared"}
 fastrand = "2.4.1"
 walkdir = "2.5.0"
