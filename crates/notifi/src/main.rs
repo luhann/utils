@@ -4,17 +4,20 @@
 //!
 //! Prints dunst status instantly on state changes using DBus monitoring.
 
-use std::env;
-use std::error::Error;
-use std::io::{self, Write};
-use std::process::Command;
+use std::{
+    env,
+    error::Error,
+    io::{self, Write},
+    process::Command,
+};
 
 use clap::{Parser, ValueEnum};
 use serde_json::json;
-use zbus::blocking::{Connection, fdo::DBusProxy};
-use zbus::{MatchRule, MessageType};
-
 use shared::command_exists;
+use zbus::{
+    MatchRule, MessageType,
+    blocking::{Connection, fdo::DBusProxy},
+};
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 enum OutputMode {
@@ -148,8 +151,9 @@ fn history_count() -> Result<usize, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clap::Parser;
+
+    use super::*;
 
     #[test]
     fn parses_defaults() {

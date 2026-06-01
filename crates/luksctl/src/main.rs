@@ -1,10 +1,11 @@
-use std::error::Error;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
 
 use clap::{Parser, Subcommand};
-
 use shared::{command_exists, home_dir};
 
 /// Sub-command enum
@@ -369,9 +370,11 @@ fn df_last_line(mount_point: &Path) -> Result<Option<String>, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use clap::Parser;
     use std::path::PathBuf;
+
+    use clap::Parser;
+
+    use super::*;
 
     #[test]
     fn luks_name_from_path_strips_suffix() {

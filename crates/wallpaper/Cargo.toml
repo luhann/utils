@@ -4,7 +4,7 @@ version = "0.2.1"
 edition = "2024"
 
 [dependencies]
-clap = { version = "4.4", features = ["derive"] }
-shared = {path = "../shared"}
-fastrand = "2.4.1"
-walkdir = "2.5.0"
+clap = { workspace = true }
+fastrand = { workspace = true }
+shared = { workspace = true }
+walkdir = { workspace = true }

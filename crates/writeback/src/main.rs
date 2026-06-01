@@ -15,10 +15,12 @@
 //! # Run continuously as a daemon updating every 1 second (Perfect for Waybar)
 //! writeback --daemon --interval 1
 //! ```
-use std::fs::File;
-use std::io::{self, Write};
-use std::thread;
-use std::time::Duration;
+use std::{
+    fs::File,
+    io::{self, Write},
+    thread,
+    time::Duration,
+};
 
 use clap::Parser;
 use memchr::memmem;
@@ -172,9 +174,11 @@ fn parse_writeback_kb<R: io::Read>(mut reader: R) -> io::Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Args, parse_writeback_kb};
-    use clap::Parser;
     use std::io::Cursor;
+
+    use clap::Parser;
+
+    use crate::{Args, parse_writeback_kb};
 
     #[test]
     fn parses_writeback_value() {

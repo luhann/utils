@@ -15,9 +15,11 @@
 //! search
 //! ```
 
-use std::error::Error;
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::{
+    error::Error,
+    io::Write,
+    process::{Command, Stdio},
+};
 
 use clap::Parser;
 use urlencoding::encode;
@@ -280,8 +282,9 @@ fn is_direct_url(query: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, parse_selection};
     use clap::Parser;
+
+    use super::{Args, parse_selection};
 
     #[test]
     fn parses_direct_bang_command() {

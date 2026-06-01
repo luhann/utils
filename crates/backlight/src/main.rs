@@ -11,8 +11,7 @@
 //!
 //! backlight 10 25
 //! ```
-use std::error::Error;
-use std::process::Command;
+use std::{error::Error, process::Command};
 
 use clap::Parser;
 
@@ -86,8 +85,9 @@ fn spawn_ddcutil(display: &str, brightness: &str) -> Result<std::process::Child,
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clap::Parser;
+
+    use super::*;
 
     #[test]
     fn errors_on_invalid_brightness_values() {

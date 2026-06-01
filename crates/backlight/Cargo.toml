@@ -5,4 +5,4 @@ edition = "2024"
 description = "A utility to control external monitor brightness through `ddcutil`."
 
 [dependencies]
-clap = { version = "4.4", features = ["derive"] }
+clap = { workspace = true }
