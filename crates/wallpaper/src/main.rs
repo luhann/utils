@@ -14,15 +14,16 @@
 //!
 //! ```
 
-use std::env;
-use std::error::Error;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    env,
+    error::Error,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use clap::Parser;
-use walkdir::WalkDir;
-
 use shared::home_dir;
+use walkdir::WalkDir;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Set a random wallpaper on X11 or Wayland", long_about = None)]
@@ -167,8 +168,9 @@ fn default_wallpaper_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clap::Parser;
+
+    use super::*;
 
     #[test]
     fn parses_no_xinerama_flag() {

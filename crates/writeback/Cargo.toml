@@ -5,5 +5,5 @@ edition = "2024"
 description = "A high-performance utility to monitor the system's 'Writeback' memory state via `/proc/meminfo`."
 
 [dependencies]
-memchr = "2.7"
-clap = { version = "4.4", features = ["derive"] }
+clap = { workspace = true }
+memchr = { workspace = true }

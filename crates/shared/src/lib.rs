@@ -10,9 +10,7 @@
 //! shared = "0.1.0"
 //! ```
 
-use std::env;
-use std::error::Error;
-use std::path::PathBuf;
+use std::{env, error::Error, path::PathBuf};
 
 /// Check if an OS command exists on the system.
 ///
