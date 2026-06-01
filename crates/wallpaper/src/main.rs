@@ -16,19 +16,35 @@
 
 use std::env;
 use std::error::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use clap::Parser;
 use walkdir::WalkDir;
 
 use shared::home_dir;
 
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Set a random wallpaper on X11 or Wayland", long_about = None)]
+struct Args {
+    /// Pass --no-xinerama through to feh in X11 sessions
+    #[arg(long)]
+    no_xinerama: bool,
+
+    /// Directory to pick a random wallpaper from
+    #[arg(long, default_value_os_t = default_wallpaper_dir())]
+    wallpaper_dir: PathBuf,
+}
+
 /// Main entry point for binary.
 fn main() -> Result<(), Box<dyn Error>> {
-    let no_xinerama = env::args().skip(1).any(|arg| arg == "--no-xinerama");
-    let wallpaper_dir = home_dir()?.join("onedrive/wallpapers");
-    let wallpaper = pick_random_wallpaper(&wallpaper_dir)?
-        .ok_or_else(|| format!("No wallpaper files found in {}", wallpaper_dir.display()))?;
+    let args = Args::parse();
+    let wallpaper = pick_random_wallpaper(&args.wallpaper_dir)?.ok_or_else(|| {
+        format!(
+            "No wallpaper files found in {}",
+            args.wallpaper_dir.display()
+        )
+    })?;
 
     let is_wayland = env::var_os("XDG_SESSION_TYPE")
         .map(|val| val == "wayland")
@@ -65,7 +81,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         let mut command = Command::new("feh");
         command.arg("--no-fehbg");
-        if no_xinerama {
+        if args.no_xinerama {
             command.arg("--no-xinerama");
         }
         command.arg("--bg-fill").arg(wallpaper.path());
@@ -91,15 +107,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 /// Return a random wallpaper path from the given directory.
 ///
 /// This function makes use of [Reservoir sampling - Algorithm
-/// R](https://en.wikipedia.org/wiki/Reservoir_sampling#Simple:_Algorithm_R).
+/// L](https://en.wikipedia.org/wiki/Reservoir_sampling#Simple:_Algorithm_L).
 ///
-/// I investigated algorithm L, but for selecting only 1 element algorithm L is actually
-/// less efficient than algorithm R (because of CPU floating point operations not inherently),
-/// hence we keep algorithm R here.
-/// If I ever wanted to select more than 1 file at a time then algorithm L is likely more efficient
-/// (depending on the size of the wallpaper directory).
-/// Likely algorithm R will be more efficient until the k I want to select is in the thousands
-/// and the n I'm selecting from is in the 10s of thousands
 ///
 /// # Examples
 ///
@@ -117,7 +126,7 @@ fn pick_random_wallpaper(dir: &Path) -> Result<Option<walkdir::DirEntry>, Box<dy
 
     let mut chosen: Option<walkdir::DirEntry> = candidates.next();
     let mut rng = fastrand::Rng::new();
-    let mut w: f64 = fastrand::f64();
+    let mut w: f64 = rng.f64();
 
     // Reservoir sampling for a single item
     loop {
@@ -144,16 +153,32 @@ fn pick_random_wallpaper(dir: &Path) -> Result<Option<walkdir::DirEntry>, Box<dy
 ///   - webp
 ///
 fn is_supported_image(entry: &walkdir::DirEntry) -> bool {
-    let name = entry.file_name();
-    let bytes = name.as_encoded_bytes();
+    matches!(
+        entry.path().extension().and_then(|e| e.to_str()),
+        Some(ext) if matches!(ext.to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png" | "webp")
+    )
+}
 
-    // Scan backwards from the end of the filename bytes for the dot
-    if let Some(dot_idx) = bytes.iter().rposition(|&b| b == b'.') {
-        let ext = &bytes[dot_idx + 1..];
-        return ext.eq_ignore_ascii_case(b"jpg")
-            || ext.eq_ignore_ascii_case(b"jpeg")
-            || ext.eq_ignore_ascii_case(b"png")
-            || ext.eq_ignore_ascii_case(b"webp");
+fn default_wallpaper_dir() -> PathBuf {
+    home_dir()
+        .map(|h| h.join("onedrive/wallpapers"))
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn parses_no_xinerama_flag() {
+        let args = Args::try_parse_from(["wallpaper", "--no-xinerama"]).unwrap();
+        assert!(args.no_xinerama);
     }
-    false
+
+    #[test]
+    fn defaults_no_xinerama_to_false() {
+        let args = Args::try_parse_from(["wallpaper"]).unwrap();
+        assert!(!args.no_xinerama);
+    }
 }

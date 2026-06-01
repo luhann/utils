@@ -1,7 +1,8 @@
 [package]
 name = "backlight"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2024"
 description = "A utility to control external monitor brightness through `ddcutil`."
 
 [dependencies]
+clap = { version = "4.4", features = ["derive"] }

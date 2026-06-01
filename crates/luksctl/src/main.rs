@@ -1,15 +1,46 @@
-use shared::{command_exists, home_dir};
-use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use clap::{Parser, Subcommand};
+
+use shared::{command_exists, home_dir};
+
 /// Sub-command enum
+#[derive(Subcommand, Debug)]
 enum Action {
-    Open,
-    Close,
-    Status,
+    /// Open and mount a LUKS container
+    Open {
+        /// Path to a LUKS container file
+        luks_file: PathBuf,
+
+        /// Optional custom mount point (default: ~/container_name)
+        mount_point: Option<PathBuf>,
+    },
+    /// Unmount and close a LUKS container
+    Close {
+        /// Path to a LUKS container file
+        luks_file: PathBuf,
+
+        /// Optional custom mount point (default: ~/container_name)
+        mount_point: Option<PathBuf>,
+    },
+    /// Show status of a LUKS container
+    Status {
+        /// Path to a LUKS container file
+        luks_file: PathBuf,
+
+        /// Optional custom mount point (default: ~/container_name)
+        mount_point: Option<PathBuf>,
+    },
+}
+
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Open, close, or inspect LUKS container files", long_about = None)]
+struct Args {
+    #[command(subcommand)]
+    action: Action,
 }
 
 /// Privilege Escalation Runner
@@ -19,53 +50,58 @@ enum PrivilegeRunner {
     None,
 }
 
-/// Help menu
-const USAGE: &str = concat!(
-    "Usage: {program} (open|close|status) /path/to/luks_file [mount_point]\n",
-    "\n",
-    "Commands:\n",
-    "  open    - Open and mount LUKS container\n",
-    "  close   - Unmount and close LUKS container\n",
-    "  status  - Show status of LUKS container\n",
-    "\n",
-    "Arguments:\n",
-    "  luks_file    - Path to LUKS container file\n",
-    "  mount_point  - Optional custom mount point (default: ~/container_name)\n",
-);
-
 /// Main entry point for binary
 fn main() -> Result<(), Box<dyn Error>> {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() == 1 || args[1] == "-h" || args[1] == "--help" {
-        println!("{}", USAGE);
-        return Ok(());
-    }
-
-    if args.len() < 3 {
-        println!("{}", USAGE);
-        return Err("Insufficient arguments".into());
-    }
-
-    let action = parse_action(&args[1])?;
-    let luks_file = PathBuf::from(&args[2]);
-
-    if !luks_file.is_file() {
-        return Err(format!("LUKS file '{}' does not exist", luks_file.display()).into());
-    }
-
-    let luks_name = luks_name_from_path(&luks_file)?;
+    let args = Args::parse();
     let privilege_runner = detect_privilege_runner();
-    let mount_point = if let Some(custom_mount_point) = args.get(3) {
-        PathBuf::from(custom_mount_point)
-    } else {
-        home_dir()?.join(&luks_name)
-    };
 
-    match action {
-        Action::Status => status(&luks_file, &luks_name, &mount_point),
-        Action::Open => open_luks(&luks_file, &luks_name, &mount_point, &privilege_runner),
-        Action::Close => close_luks(&luks_file, &luks_name, &mount_point, &privilege_runner),
+    match args.action {
+        Action::Status {
+            luks_file,
+            mount_point,
+        } => {
+            ensure_luks_file_exists(&luks_file)?;
+            let luks_name = luks_name_from_path(&luks_file)?;
+            let mount_point = resolve_mount_point(&luks_name, mount_point)?;
+            status(&luks_file, &luks_name, &mount_point)
+        }
+        Action::Open {
+            luks_file,
+            mount_point,
+        } => {
+            ensure_luks_file_exists(&luks_file)?;
+            let luks_name = luks_name_from_path(&luks_file)?;
+            let mount_point = resolve_mount_point(&luks_name, mount_point)?;
+            open_luks(&luks_file, &luks_name, &mount_point, &privilege_runner)
+        }
+        Action::Close {
+            luks_file,
+            mount_point,
+        } => {
+            ensure_luks_file_exists(&luks_file)?;
+            let luks_name = luks_name_from_path(&luks_file)?;
+            let mount_point = resolve_mount_point(&luks_name, mount_point)?;
+            close_luks(&luks_file, &luks_name, &mount_point, &privilege_runner)
+        }
+    }
+}
+
+fn ensure_luks_file_exists(luks_file: &Path) -> Result<(), Box<dyn Error>> {
+    if luks_file.is_file() {
+        Ok(())
+    } else {
+        Err(format!("LUKS file '{}' does not exist", luks_file.display()).into())
+    }
+}
+
+fn resolve_mount_point(
+    luks_name: &str,
+    mount_point: Option<PathBuf>,
+) -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(path) = mount_point {
+        Ok(path)
+    } else {
+        Ok(home_dir()?.join(luks_name))
     }
 }
 
@@ -96,16 +132,6 @@ fn privileged_command(privilege_runner: &PrivilegeRunner, program: &str) -> Comm
             command
         }
         PrivilegeRunner::None => Command::new(program),
-    }
-}
-
-/// Parse arguments to determine action
-fn parse_action(action: &str) -> Result<Action, Box<dyn Error>> {
-    match action {
-        "open" => Ok(Action::Open),
-        "close" => Ok(Action::Close),
-        "status" => Ok(Action::Status),
-        _ => Err(format!("Invalid action '{action}'. Use 'open', 'close', or 'status'.").into()),
     }
 }
 
@@ -344,6 +370,7 @@ fn df_last_line(mount_point: &Path) -> Result<Option<String>, Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use std::path::PathBuf;
 
     #[test]
@@ -362,5 +389,41 @@ mod tests {
     fn luks_name_from_path_errors_on_invalid() {
         let path = PathBuf::from("");
         assert!(luks_name_from_path(&path).is_err());
+    }
+
+    #[test]
+    fn parses_open_with_required_args() {
+        let args = Args::try_parse_from(["luksctl", "open", "/tmp/secret.luks"]).unwrap();
+        match args.action {
+            Action::Open {
+                luks_file,
+                mount_point,
+            } => {
+                assert_eq!(luks_file, PathBuf::from("/tmp/secret.luks"));
+                assert!(mount_point.is_none());
+            }
+            _ => panic!("expected open action"),
+        }
+    }
+
+    #[test]
+    fn parses_close_with_custom_mount_point() {
+        let args =
+            Args::try_parse_from(["luksctl", "close", "/tmp/secret.luks", "/mnt/secret"]).unwrap();
+        match args.action {
+            Action::Close {
+                luks_file,
+                mount_point,
+            } => {
+                assert_eq!(luks_file, PathBuf::from("/tmp/secret.luks"));
+                assert_eq!(mount_point, Some(PathBuf::from("/mnt/secret")));
+            }
+            _ => panic!("expected close action"),
+        }
+    }
+
+    #[test]
+    fn errors_on_invalid_subcommand() {
+        assert!(Args::try_parse_from(["luksctl", "unlock", "/tmp/secret.luks"]).is_err());
     }
 }
