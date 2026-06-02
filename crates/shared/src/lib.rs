@@ -10,10 +10,7 @@
 //! shared = "0.1.0"
 //! ```
 
-use std::{
-    env,
-    path::{PathBuf},
-};
+use std::{env, path::PathBuf};
 
 use anyhow::Context;
 

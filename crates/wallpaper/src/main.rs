@@ -20,7 +20,7 @@ use std::{
     process::Command,
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use shared::home_dir;
 use walkdir::WalkDir;
@@ -34,16 +34,16 @@ struct Args {
 
     /// Directory to pick a random wallpaper from
     #[arg(long, default_value_os_t = default_wallpaper_dir())]
-    wallpaper_dir: PathBuf,
+    dir: PathBuf,
 }
 
 /// Main entry point for binary.
 fn main() -> Result<()> {
     let args = Args::parse();
-    let wallpaper = pick_random_wallpaper(&args.wallpaper_dir)?.with_context(|| {
+    let wallpaper = pick_random_wallpaper(&args.dir)?.with_context(|| {
         format!(
             "No wallpaper files found in {}",
-            args.wallpaper_dir.display()
+            args.dir.display()
         )
     })?;
 
@@ -67,7 +67,9 @@ fn main() -> Result<()> {
         {
             Ok(status) => status,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Err(anyhow!("awww not found on your system. Is the daemon running?"));
+                return Err(anyhow!(
+                    "awww not found on your system. Is the daemon running?"
+                ));
             }
             Err(err) => return Err(err.into()),
         };
