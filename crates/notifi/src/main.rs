@@ -4,25 +4,24 @@
 //!
 //! Prints dunst status instantly on state changes using DBus monitoring.
 
-use std::{env, error::Error};
+use std::borrow::Cow;
 
 use clap::{Parser, ValueEnum};
 use futures_util::StreamExt;
-use serde_json::json;
+use serde_json::{Value, json};
 use zbus::{Connection, MatchRule, Proxy, fdo::DBusProxy, message::Type as MessageType};
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 enum OutputMode {
     Json,
     Plain,
-    Auto,
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Monitor Dunst status for Waybar/Polybar", long_about = None)]
+#[command(author, version, about = "Monitor Dunst status for Waybar", long_about = None)]
 struct Args {
     /// Output format for dunstctl status
-    #[arg(short, long, value_enum, default_value_t = OutputMode::Auto)]
+    #[arg(short, long, value_enum, default_value_t = OutputMode::Json)]
     mode: OutputMode,
 
     /// Run continuously as an event-driven daemon
@@ -44,7 +43,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .await?;
 
     if !args.daemon {
-        println!("{}", get_status(&dunst_proxy, &args.mode).await?);
+        println!("{}", get_status(&dunst_proxy, args.mode).await?);
         return Ok(());
     }
 
@@ -65,26 +64,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut stream = zbus::MessageStream::from(&conn);
 
     // Track the last printed line to eliminate the cascading pause double-print
-    let mut last_output = get_status(&dunst_proxy, &args.mode).await?;
+    let mut last_output = get_status(&dunst_proxy, args.mode).await?;
     println!("{}", last_output);
 
-    while let Some(Ok(message)) = stream.next().await {
-        if message.header().message_type() == MessageType::Signal {
-            let new_output = get_status(&dunst_proxy, &args.mode).await?;
-            // If Dunst spams multiple property updates for the same event,
-            // this boundary blocks the duplicate text from hitting Waybar/Polybar.
-            if new_output != last_output {
-                // Use a block to control the lifetime of the lock
-                {
-                    use std::io::Write;
-                    let mut out = std::io::stdout().lock();
+    while stream.next().await.is_some() {
+        let new_output = get_status(&dunst_proxy, args.mode).await?;
+        // If Dunst spams multiple property updates for the same event,
+        // this boundary blocks the duplicate text from hitting Waybar/Polybar.
+        if new_output != last_output {
+            // Use a block to control the lifetime of the lock
+            {
+                use std::io::Write;
+                let mut out = std::io::stdout().lock();
 
-                    let _ = writeln!(out, "{}", new_output);
-                    let _ = out.flush();
-                }
-
-                last_output = new_output;
+                let _ = writeln!(out, "{}", new_output);
+                let _ = out.flush();
             }
+
+            last_output = new_output;
         }
     }
 
@@ -92,10 +89,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 /// Fetches current dunst state via DBus and returns the formatted output string
-async fn get_status(
-    dunst_proxy: &Proxy<'_>,
-    output_mode: &OutputMode,
-) -> Result<String, Box<dyn Error>> {
+async fn get_status(dunst_proxy: &Proxy<'_>, output_mode: OutputMode) -> Result<Value> {
     // Check for "paused" (bool). If that fails, fallback to "pauseLevel" (i32).
     let is_paused = if let Ok(paused) = dunst_proxy.get_property::<bool>("paused").await {
         paused
@@ -119,43 +113,30 @@ async fn get_status(
         .await
         .unwrap_or_default();
 
-    let is_wayland = env::var("XDG_SESSION_TYPE").is_ok_and(|v| v == "wayland");
+    if output_mode == OutputMode::Plain {
+        // Waybar custom modules can also accept a raw string text line if you want just the icon
+        return Ok(json!(if is_paused { "" } else { "" }));
+    }
 
-    let emit_json = match output_mode {
-        OutputMode::Json => true,
-        OutputMode::Plain => false,
-        OutputMode::Auto => is_wayland,
+    let (text, class, alt): (Cow<'_, str>, &str, Option<&str>) = if is_paused {
+        let txt = if waiting_count > 0 {
+            Cow::Owned(format!(" {waiting_count}"))
+        } else {
+            Cow::Borrowed("") // No allocation!
+        };
+        (txt, "paused", None)
+    } else {
+        (Cow::Borrowed(""), "active", Some("active"))
     };
 
-    if emit_json {
-        let (text, class, alt) = if is_paused {
-            let icon = "";
-            let txt = if waiting_count > 0 {
-                format!("{icon} {waiting_count}")
-            } else {
-                icon.to_owned()
-            };
-            (txt, "paused", None)
-        } else {
-            ("".to_owned(), "active", Some("active"))
-        };
+    let output = json!({
+        "text": text,
+        "class": class,
+        "alt": alt,
+        "tooltip": format!("{num_notifications} notifications in history"),
+    });
 
-        let output = json!({
-            "text": text,
-            "class": class,
-            "alt": alt,
-            "tooltip": format!("{num_notifications} notifications in history"),
-        });
-
-        Ok(output.to_string())
-    } else {
-        let text = if is_paused {
-            "%{F#821717} %{F-}"
-        } else {
-            ""
-        };
-        Ok(text.to_string())
-    }
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -167,7 +148,7 @@ mod tests {
     #[test]
     fn parses_defaults() {
         let args = Args::try_parse_from(["notifi"]).unwrap();
-        assert_eq!(args.mode, OutputMode::Auto);
+        assert_eq!(args.mode, OutputMode::Json);
         assert!(!args.daemon);
     }
 
