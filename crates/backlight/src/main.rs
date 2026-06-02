@@ -67,6 +67,10 @@ fn set_brightness(b1: u8, b2: u8) -> Result<(), Box<dyn Error>> {
 /// Change the brightness on the provided display with the given brightness value.
 /// `--skip-ddc-checks` and --enable-dynamic-sleep` are options that experimentally appear to
 /// provide the best balance between speed and correctness.
+///
+/// I thought about using the [ddc_hi](https://docs.rs/ddc-hi/latest/ddc_hi/) crate to replace
+/// this, but `ddcutil` does a lot under the hood to speed up i2c connections and ensure
+/// correctness. I'm not convinced the Rust crate will be faster here for a oneshot CLI util.
 fn spawn_ddcutil(display: &str, brightness: &str) -> Result<std::process::Child, Box<dyn Error>> {
     let child = Command::new("ddcutil")
         .args([

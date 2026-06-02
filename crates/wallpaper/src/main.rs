@@ -13,10 +13,10 @@
 //! wallpaper
 //!
 //! ```
-
 use std::{
     env,
     error::Error,
+    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -47,9 +47,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
     })?;
 
-    let is_wayland = env::var_os("XDG_SESSION_TYPE")
-        .map(|val| val == "wayland")
-        .unwrap_or(false);
+    let is_wayland = env::var_os("XDG_SESSION_TYPE").is_some_and(|val| val == "wayland");
 
     if is_wayland {
         let status = match Command::new("awww")
@@ -120,10 +118,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 /// ```
 fn pick_random_wallpaper(dir: &Path) -> Result<Option<walkdir::DirEntry>, Box<dyn Error>> {
     let mut candidates = WalkDir::new(dir)
+        .follow_links(false)
         .into_iter()
         .filter_map(Result::ok)
         // Filter using the borrowed DirEntry to avoid early allocations
-        .filter(|entry| entry.file_type().is_file() && is_supported_image(entry));
+        .filter(is_supported_image);
 
     let mut chosen: Option<walkdir::DirEntry> = candidates.next();
     let mut rng = fastrand::Rng::new();
@@ -154,10 +153,14 @@ fn pick_random_wallpaper(dir: &Path) -> Result<Option<walkdir::DirEntry>, Box<dy
 ///   - webp
 ///
 fn is_supported_image(entry: &walkdir::DirEntry) -> bool {
-    matches!(
-        entry.path().extension().and_then(|e| e.to_str()),
-        Some(ext) if matches!(ext.to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png" | "webp")
-    )
+    entry.path().extension().is_some_and(|ext| {
+        let bytes = ext.as_bytes();
+        // Match against exact byte representations (handles case insensitivity manually or forces strict extensions)
+        matches!(
+            bytes,
+            b"jpg" | b"JPG" | b"jpeg" | b"JPEG" | b"png" | b"PNG" | b"webp" | b"WEBP"
+        ) && entry.file_type().is_file()
+    })
 }
 
 fn default_wallpaper_dir() -> PathBuf {

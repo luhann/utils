@@ -104,21 +104,20 @@ async fn get_status(
         dunst_proxy
             .get_property::<i32>("pauseLevel")
             .await
-            .map(|level| level > 0)
-            .unwrap_or(false)
+            .is_ok_and(|level| level > 0)
     };
 
     // Fetch waitingLength natively
     let waiting_count = dunst_proxy
         .get_property::<u32>("waitingLength")
         .await
-        .unwrap_or(0);
+        .unwrap_or_default();
 
     // Fetch historyLength natively
     let num_notifications = dunst_proxy
         .get_property::<u32>("historyLength")
         .await
-        .unwrap_or(0);
+        .unwrap_or_default();
 
     let is_wayland = env::var("XDG_SESSION_TYPE").is_ok_and(|v| v == "wayland");
 
