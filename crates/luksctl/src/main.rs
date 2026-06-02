@@ -1,40 +1,46 @@
+//! # luksctl
+//!
+//! A utility to control encrypted luks_file containers.
+//!
+//! # Examples
+//!
+//! ```fish
+//! luksctl open shadow
+//!
+//! # or
+//!
+//! luksctl status shadow
+//! ```
+
 use std::{
-    error::Error,
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
-use clap::{Parser, Subcommand};
+use anyhow::{Context, Result, bail};
+use clap::{Args as ClapArgs, Parser, Subcommand};
 use shared::{command_exists, home_dir};
+
+/// Common arguments for all subcommands
+#[derive(ClapArgs, Debug, Clone)]
+struct ContainerArgs {
+    /// Path to a LUKS container file
+    luks_file: PathBuf,
+
+    /// Optional custom mount point (default: ~/container_name)
+    mount_point: Option<PathBuf>,
+}
 
 /// Sub-command enum
 #[derive(Subcommand, Debug)]
 enum Action {
     /// Open and mount a LUKS container
-    Open {
-        /// Path to a LUKS container file
-        luks_file: PathBuf,
-
-        /// Optional custom mount point (default: ~/container_name)
-        mount_point: Option<PathBuf>,
-    },
+    Open(ContainerArgs),
     /// Unmount and close a LUKS container
-    Close {
-        /// Path to a LUKS container file
-        luks_file: PathBuf,
-
-        /// Optional custom mount point (default: ~/container_name)
-        mount_point: Option<PathBuf>,
-    },
+    Close(ContainerArgs),
     /// Show status of a LUKS container
-    Status {
-        /// Path to a LUKS container file
-        luks_file: PathBuf,
-
-        /// Optional custom mount point (default: ~/container_name)
-        mount_point: Option<PathBuf>,
-    },
+    Status(ContainerArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -52,63 +58,56 @@ enum PrivilegeRunner {
 }
 
 /// Main entry point for binary
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     let args = Args::parse();
     let privilege_runner = detect_privilege_runner();
 
+    // Extract common args regardless of action
+    let container_args = match &args.action {
+        Action::Open(c) | Action::Close(c) | Action::Status(c) => c,
+    };
+
+    // Perform shared validation and setup
+    ensure_luks_file_exists(&container_args.luks_file)?;
+    let luks_name = luks_name_from_path(&container_args.luks_file)?;
+    let mount_point = resolve_mount_point(&luks_name, container_args.mount_point.clone())?;
+
+    // Execute the specific action
     match args.action {
-        Action::Status {
-            luks_file,
-            mount_point,
-        } => {
-            ensure_luks_file_exists(&luks_file)?;
-            let luks_name = luks_name_from_path(&luks_file)?;
-            let mount_point = resolve_mount_point(&luks_name, mount_point)?;
-            status(&luks_file, &luks_name, &mount_point)
-        }
-        Action::Open {
-            luks_file,
-            mount_point,
-        } => {
-            ensure_luks_file_exists(&luks_file)?;
-            let luks_name = luks_name_from_path(&luks_file)?;
-            let mount_point = resolve_mount_point(&luks_name, mount_point)?;
-            open_luks(&luks_file, &luks_name, &mount_point, &privilege_runner)
-        }
-        Action::Close {
-            luks_file,
-            mount_point,
-        } => {
-            ensure_luks_file_exists(&luks_file)?;
-            let luks_name = luks_name_from_path(&luks_file)?;
-            let mount_point = resolve_mount_point(&luks_name, mount_point)?;
-            close_luks(&luks_file, &luks_name, &mount_point, &privilege_runner)
-        }
+        Action::Status(_) => status(&container_args.luks_file, &luks_name, &mount_point),
+        Action::Open(_) => open_luks(
+            &container_args.luks_file,
+            &luks_name,
+            &mount_point,
+            &privilege_runner,
+        ),
+        Action::Close(_) => close_luks(
+            &container_args.luks_file,
+            &luks_name,
+            &mount_point,
+            &privilege_runner,
+        ),
     }
 }
 
-fn ensure_luks_file_exists(luks_file: &Path) -> Result<(), Box<dyn Error>> {
-    if luks_file.is_file() {
-        Ok(())
-    } else {
-        Err(format!("LUKS file '{}' does not exist", luks_file.display()).into())
+fn ensure_luks_file_exists(luks_file: &Path) -> Result<()> {
+    if !luks_file.is_file() {
+        bail!("LUKS file '{}' does not exist", luks_file.display());
     }
+    Ok(())
 }
 
-fn resolve_mount_point(
-    luks_name: &str,
-    mount_point: Option<PathBuf>,
-) -> Result<PathBuf, Box<dyn Error>> {
+fn resolve_mount_point(luks_name: &str, mount_point: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = mount_point {
         Ok(path)
     } else {
-        Ok(home_dir()?.join(luks_name))
+        Ok(home_dir()
+            .context("Failed to locate home directory")?
+            .join(luks_name))
     }
 }
 
 /// Check which privilege escalation command to use
-///
-/// Prefer `sudo` if it is installed otherwise use `run0`.
 fn detect_privilege_runner() -> PrivilegeRunner {
     if command_exists("sudo") {
         PrivilegeRunner::Sudo
@@ -121,27 +120,29 @@ fn detect_privilege_runner() -> PrivilegeRunner {
 
 /// Construct privileged_command
 fn privileged_command(privilege_runner: &PrivilegeRunner, program: &str) -> Command {
+    let mut cmd;
     match privilege_runner {
         PrivilegeRunner::Sudo => {
-            let mut command = Command::new("sudo");
-            command.arg(program);
-            command
+            cmd = Command::new("sudo");
+            cmd.arg(program);
         }
         PrivilegeRunner::Run0 => {
-            let mut command = Command::new("run0");
-            command.arg(program);
-            command
+            cmd = Command::new("run0");
+            cmd.arg(program);
         }
-        PrivilegeRunner::None => Command::new(program),
+        PrivilegeRunner::None => {
+            cmd = Command::new(program);
+        }
     }
+    cmd
 }
 
 /// Generate a name for the given luks file
-fn luks_name_from_path(luks_file: &Path) -> Result<String, Box<dyn Error>> {
+fn luks_name_from_path(luks_file: &Path) -> Result<String> {
     let file_name = luks_file
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or("Unable to derive LUKS name from file path")?;
+        .context("Unable to derive LUKS name from file path")?;
 
     Ok(file_name
         .strip_suffix(".luks")
@@ -150,7 +151,7 @@ fn luks_name_from_path(luks_file: &Path) -> Result<String, Box<dyn Error>> {
 }
 
 /// Check status of given luks container
-fn status(luks_file: &Path, luks_name: &str, mount_point: &Path) -> Result<(), Box<dyn Error>> {
+fn status(luks_file: &Path, luks_name: &str, mount_point: &Path) -> Result<()> {
     println!("LUKS Container: {}", luks_file.display());
     println!("Device Name: {luks_name}");
     println!("Mount Point: {}", mount_point.display());
@@ -174,34 +175,28 @@ fn status(luks_file: &Path, luks_name: &str, mount_point: &Path) -> Result<(), B
 }
 
 /// Open a luks container
-///
-/// Mount the given luks container at the given `mount_point` by default it mounts the container in
-/// the user's home_dir.
 fn open_luks(
     luks_file: &Path,
     luks_name: &str,
     mount_point: &Path,
     privilege_runner: &PrivilegeRunner,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let mut opened_in_this_run = false;
 
     if is_device_open(luks_name) {
         if is_mounted(mount_point) {
-            return Err(format!(
+            bail!(
                 "LUKS device '{luks_name}' is already open and mounted at '{}'",
                 mount_point.display()
-            )
-            .into());
+            );
         }
-
         println!("Device is open but not mounted. Attempting to mount...");
     } else {
         if !is_luks_encrypted(luks_file)? {
-            return Err(format!(
+            bail!(
                 "File '{}' is not a valid LUKS container",
                 luks_file.display()
-            )
-            .into());
+            );
         }
 
         println!("Opening LUKS container...");
@@ -212,9 +207,8 @@ fn open_luks(
             .status()?;
 
         if !open_status.success() {
-            return Err("Failed to open LUKS device. Check password and try again.".into());
+            bail!("Failed to open LUKS device. Check password and try again.");
         }
-
         opened_in_this_run = true;
     }
 
@@ -226,11 +220,10 @@ fn open_luks(
                 .stderr(Stdio::null())
                 .status();
         }
-        return Err(format!(
+        bail!(
             "Failed to create mount point '{}': {err}",
             mount_point.display()
-        )
-        .into());
+        );
     }
 
     println!("Mounting filesystem...");
@@ -247,7 +240,7 @@ fn open_luks(
                 .stderr(Stdio::null())
                 .status();
         }
-        return Err("Failed to mount filesystem. Device may be corrupted.".into());
+        bail!("Failed to mount filesystem. Device may be corrupted.");
     }
 
     println!(
@@ -255,6 +248,7 @@ fn open_luks(
         luks_file.display(),
         mount_point.display()
     );
+
     println!("Available space:");
     if let Some(line) = df_last_line(mount_point)? {
         println!("{line}");
@@ -264,14 +258,12 @@ fn open_luks(
 }
 
 /// Close the given luks container
-///
-/// Also removes the `mount_point` after closing the container.
 fn close_luks(
     luks_file: &Path,
     luks_name: &str,
     mount_point: &Path,
     privilege_runner: &PrivilegeRunner,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let mut cleanup_needed = false;
 
     if is_mounted(mount_point) {
@@ -279,8 +271,9 @@ fn close_luks(
         let umount_status = privileged_command(privilege_runner, "umount")
             .arg(mount_point)
             .status()?;
+
         if !umount_status.success() {
-            return Err("Failed to unmount filesystem. Files may be in use.".into());
+            bail!("Failed to unmount filesystem. Files may be in use.");
         }
         cleanup_needed = true;
     }
@@ -290,8 +283,9 @@ fn close_luks(
         let close_status = privileged_command(privilege_runner, "cryptsetup")
             .args(["close", luks_name])
             .status()?;
+
         if !close_status.success() {
-            return Err("Failed to close LUKS device.".into());
+            bail!("Failed to close LUKS device.");
         }
         cleanup_needed = true;
     }
@@ -313,7 +307,7 @@ fn close_luks(
 }
 
 /// Check if a file is luks encrypted
-fn is_luks_encrypted(device: &Path) -> Result<bool, Box<dyn Error>> {
+fn is_luks_encrypted(device: &Path) -> Result<bool> {
     let status = Command::new("cryptsetup")
         .arg("isLuks")
         .arg(device)
@@ -335,20 +329,17 @@ fn is_mounted(mount_point: &Path) -> bool {
         return false;
     };
 
-    // Standardize the path to a string to match against /proc/mounts text
     let mount_str = mount_point.to_string_lossy();
 
-    // Each line looks like: /dev/mapper/luks_name /home/user/mount_point ext4 rw...
-    // We check if our mount point is listed as the second item on any line
     mounts.lines().any(|line| {
         let mut parts = line.split_whitespace();
         parts.next();
-        parts.next() == Some(&mount_str) // Check the mount target
+        parts.next() == Some(&mount_str)
     })
 }
 
 /// Get available space in the given `mount_point`
-fn df_last_line(mount_point: &Path) -> Result<Option<String>, Box<dyn Error>> {
+fn df_last_line(mount_point: &Path) -> Result<Option<String>> {
     let output = Command::new("df")
         .arg("-h")
         .arg(mount_point)
@@ -360,7 +351,8 @@ fn df_last_line(mount_point: &Path) -> Result<Option<String>, Box<dyn Error>> {
         return Ok(None);
     }
 
-    let stdout = String::from_utf8(output.stdout)?;
+    // Safer parsing: Use from_utf8_lossy to avoid panics on weird characters
+    let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout
         .lines()
         .map(str::trim)
@@ -368,6 +360,7 @@ fn df_last_line(mount_point: &Path) -> Result<Option<String>, Box<dyn Error>> {
         .map(ToOwned::to_owned))
 }
 
+// Note: Test suite needs minor adjustments to reflect `Action::Open(args)` struct syntax instead of named fields.
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -397,13 +390,14 @@ mod tests {
     #[test]
     fn parses_open_with_required_args() {
         let args = Args::try_parse_from(["luksctl", "open", "/tmp/secret.luks"]).unwrap();
+        let container_args = match &args.action {
+            Action::Open(c) | Action::Close(c) | Action::Status(c) => c,
+        };
+
         match args.action {
-            Action::Open {
-                luks_file,
-                mount_point,
-            } => {
-                assert_eq!(luks_file, PathBuf::from("/tmp/secret.luks"));
-                assert!(mount_point.is_none());
+            Action::Open(_) => {
+                assert_eq!(container_args.luks_file, PathBuf::from("/tmp/secret.luks"));
+                assert!(container_args.mount_point.is_none());
             }
             _ => panic!("expected open action"),
         }
@@ -413,13 +407,17 @@ mod tests {
     fn parses_close_with_custom_mount_point() {
         let args =
             Args::try_parse_from(["luksctl", "close", "/tmp/secret.luks", "/mnt/secret"]).unwrap();
+        let container_args = match &args.action {
+            Action::Open(c) | Action::Close(c) | Action::Status(c) => c,
+        };
+
         match args.action {
-            Action::Close {
-                luks_file,
-                mount_point,
-            } => {
-                assert_eq!(luks_file, PathBuf::from("/tmp/secret.luks"));
-                assert_eq!(mount_point, Some(PathBuf::from("/mnt/secret")));
+            Action::Close(_) => {
+                assert_eq!(container_args.luks_file, PathBuf::from("/tmp/secret.luks"));
+                assert_eq!(
+                    container_args.mount_point,
+                    Some(PathBuf::from("/mnt/secret"))
+                );
             }
             _ => panic!("expected close action"),
         }
