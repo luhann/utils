@@ -4,20 +4,12 @@
 //!
 //! Prints dunst status instantly on state changes using DBus monitoring.
 
-use std::{
-    env,
-    error::Error,
-    io::{self, Write},
-    process::Command,
-};
+use std::{env, error::Error};
 
 use clap::{Parser, ValueEnum};
+use futures_util::StreamExt;
 use serde_json::json;
-use shared::command_exists;
-use zbus::{
-    MatchRule, MessageType,
-    blocking::{Connection, fdo::DBusProxy},
-};
+use zbus::{Connection, MatchRule, Proxy, fdo::DBusProxy, message::Type as MessageType};
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 enum OutputMode {
@@ -38,53 +30,96 @@ struct Args {
     daemon: bool,
 }
 
-/// Main entry point for binary
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+    let conn = Connection::session().await?;
 
-    if !command_exists("dunstctl") {
-        return Err("dunstctl not available".into());
-    }
+    let dunst_proxy = Proxy::new(
+        &conn,
+        "org.freedesktop.Notifications",
+        "/org/freedesktop/Notifications",
+        "org.dunstproject.cmd0",
+    )
+    .await?;
 
     if !args.daemon {
-        print_status(&args.mode)?;
+        println!("{}", get_status(&dunst_proxy, &args.mode).await?);
         return Ok(());
     }
 
-    let conn = Connection::session()?;
+    let dbus_proxy = DBusProxy::new(&conn).await?;
 
-    let dbus_proxy = DBusProxy::new(&conn)?;
-
-    let rule = MatchRule::builder()
+    // Match rule: Wake up ONLY when Dunst properties change (pauseLevel, waitingLength, historyLength)
+    let rule_props = MatchRule::builder()
         .msg_type(MessageType::Signal)
+        .sender("org.freedesktop.Notifications")?
         .path("/org/freedesktop/Notifications")?
         .interface("org.freedesktop.DBus.Properties")?
+        .member("PropertiesChanged")?
         .build();
 
-    dbus_proxy.add_match_rule(rule)?;
+    // Register dbus rule
+    dbus_proxy.add_match_rule(rule_props).await?;
 
-    let mut iterator = zbus::blocking::MessageIterator::from(&conn);
+    let mut stream = zbus::MessageStream::from(&conn);
 
-    print_status(&args.mode)?;
+    // Track the last printed line to eliminate the cascading pause double-print
+    let mut last_output = get_status(&dunst_proxy, &args.mode).await?;
+    println!("{}", last_output);
 
-    while let Some(Ok(_message)) = iterator.next() {
-        if let Err(e) = print_status(&args.mode) {
-            eprintln!("Error updating dunst status: {e}");
+    while let Some(Ok(message)) = stream.next().await {
+        if message.header().message_type() == MessageType::Signal {
+            let new_output = get_status(&dunst_proxy, &args.mode).await?;
+            // If Dunst spams multiple property updates for the same event,
+            // this boundary blocks the duplicate text from hitting Waybar/Polybar.
+            if new_output != last_output {
+                // Use a block to control the lifetime of the lock
+                {
+                    use std::io::Write;
+                    let mut out = std::io::stdout().lock();
+
+                    let _ = writeln!(out, "{}", new_output);
+                    let _ = out.flush();
+                }
+
+                last_output = new_output;
+            }
         }
     }
 
     Ok(())
 }
 
-/// Fetches current dunst state and prints it to stdout
-fn print_status(output_mode: &OutputMode) -> Result<(), Box<dyn Error>> {
-    let is_paused = run_dunstctl(&["is-paused"])?.trim() == "true";
-    let waiting_count: u64 = run_dunstctl(&["count", "waiting"])?
-        .trim()
-        .parse()
-        .map_err(|e| format!("Failed to parse waiting count: {e}"))?;
+/// Fetches current dunst state via DBus and returns the formatted output string
+async fn get_status(
+    dunst_proxy: &Proxy<'_>,
+    output_mode: &OutputMode,
+) -> Result<String, Box<dyn Error>> {
+    // Check for "paused" (bool). If that fails, fallback to "pauseLevel" (i32).
+    let is_paused = if let Ok(paused) = dunst_proxy.get_property::<bool>("paused").await {
+        paused
+    } else {
+        // 2. Fallback to "pauseLevel" if "paused" fails
+        dunst_proxy
+            .get_property::<i32>("pauseLevel")
+            .await
+            .map(|level| level > 0)
+            .unwrap_or(false)
+    };
 
-    let num_notifications = history_count()?;
+    // Fetch waitingLength natively
+    let waiting_count = dunst_proxy
+        .get_property::<u32>("waitingLength")
+        .await
+        .unwrap_or(0);
+
+    // Fetch historyLength natively
+    let num_notifications = dunst_proxy
+        .get_property::<u32>("historyLength")
+        .await
+        .unwrap_or(0);
+
     let is_wayland = env::var("XDG_SESSION_TYPE").is_ok_and(|v| v == "wayland");
 
     let emit_json = match output_mode {
@@ -112,41 +147,16 @@ fn print_status(output_mode: &OutputMode) -> Result<(), Box<dyn Error>> {
             "alt": alt,
             "tooltip": format!("{num_notifications} notifications in history"),
         });
-        println!("{}", output);
+
+        Ok(output.to_string())
     } else {
-        // Polybar formatting
         let text = if is_paused {
             "%{F#821717} %{F-}"
         } else {
             ""
         };
-        println!("{}", text);
+        Ok(text.to_string())
     }
-
-    io::stdout().flush()?;
-    Ok(())
-}
-
-/// Run dunstctl with the given args
-fn run_dunstctl(args: &[&str]) -> Result<String, Box<dyn Error>> {
-    let output = Command::new("dunstctl").args(args).output()?;
-    if !output.status.success() {
-        return Err(format!("dunstctl command failed: {}", args.join(" ")).into());
-    }
-    Ok(String::from_utf8(output.stdout)?)
-}
-
-/// Get number of notifications in history
-fn history_count() -> Result<usize, Box<dyn Error>> {
-    let history_raw = run_dunstctl(&["history"])?;
-    let history_json: serde_json::Value = serde_json::from_str(&history_raw)?;
-
-    let count = history_json["data"][0]
-        .as_array()
-        .map(|notifications| notifications.len())
-        .ok_or("Unexpected dunst history format")?;
-
-    Ok(count)
 }
 
 #[cfg(test)]

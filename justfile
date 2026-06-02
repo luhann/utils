@@ -14,9 +14,13 @@ utils := replace(
 default:
     @just --list
 
+# Cargo fmt
+fmt:
+  @cargo fmt
+
 # Clean cargo artefacts
 clean:
-  cargo clean
+  @cargo clean
 
 # Build everything
 build:
