@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 clap = { workspace = true }
+futures-util = { workspace = true }
 serde_json = { workspace = true }
 shared = { workspace = true }
+tokio = { workspace = true }
 zbus = { workspace = true }
