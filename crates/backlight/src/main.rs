@@ -11,8 +11,9 @@
 //!
 //! backlight 10 25
 //! ```
-use std::{error::Error, process::Command};
+use std::process::Command;
 
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 
 /// Minimum screen brightness.
@@ -33,7 +34,7 @@ struct Args {
 }
 
 /// Main entry point for binary.
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     let brightness_display_1 = args.brightness1;
@@ -46,18 +47,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 ///
 /// **Note:** Currently this function assumes that you are using a two monitor setup.
 ///
-fn set_brightness(b1: u8, b2: u8) -> Result<(), Box<dyn Error>> {
+fn set_brightness(b1: u8, b2: u8) -> Result<()> {
     let brightness_display_1 = b1.to_string();
     let brightness_display_2 = b2.to_string();
 
-    let mut display_1 = spawn_ddcutil("1", &brightness_display_1)?;
-    let mut display_2 = spawn_ddcutil("2", &brightness_display_2)?;
+    let mut display_1 =
+        spawn_ddcutil("1", &brightness_display_1).context("spawn ddcutil failed")?;
+    let mut display_2 =
+        spawn_ddcutil("2", &brightness_display_2).context("spawn ddcutil failed")?;
 
     let status_1 = display_1.wait()?;
     let status_2 = display_2.wait()?;
 
     if !status_1.success() || !status_2.success() {
-        return Err("one or more ddcutil commands failed".into());
+        bail!("one or more ddcutil commands failed");
     }
     Ok(())
 }
@@ -71,7 +74,7 @@ fn set_brightness(b1: u8, b2: u8) -> Result<(), Box<dyn Error>> {
 /// I thought about using the [ddc_hi](https://docs.rs/ddc-hi/latest/ddc_hi/) crate to replace
 /// this, but `ddcutil` does a lot under the hood to speed up i2c connections and ensure
 /// correctness. I'm not convinced the Rust crate will be faster here for a oneshot CLI util.
-fn spawn_ddcutil(display: &str, brightness: &str) -> Result<std::process::Child, Box<dyn Error>> {
+fn spawn_ddcutil(display: &str, brightness: &str) -> Result<std::process::Child> {
     let child = Command::new("ddcutil")
         .args([
             "--display",

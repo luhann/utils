@@ -10,7 +10,10 @@
 //! shared = "0.1.0"
 //! ```
 
-use std::{env, path::PathBuf};
+use std::{
+    env,
+    path::{PathBuf},
+};
 
 use anyhow::Context;
 
@@ -31,7 +34,6 @@ pub fn command_exists(cmd: &str) -> bool {
     };
 
     for mut path in env::split_paths(&paths) {
-        // --- Linux / macOS / Unix compilation branch ---
         #[cfg(unix)]
         {
             path.push(cmd);
@@ -40,7 +42,6 @@ pub fn command_exists(cmd: &str) -> bool {
             }
         }
 
-        // --- Windows compilation branch ---
         #[cfg(windows)]
         {
             if cmd.ends_with(".exe") {
@@ -86,9 +87,9 @@ pub fn command_exists(cmd: &str) -> bool {
 /// }
 /// ```
 pub fn home_dir() -> anyhow::Result<std::path::PathBuf> {
-    let home = env::var_os("HOME").context("HOME environment variable is not set")?;
-
-    Ok(PathBuf::from(home))
+    env::var_os("HOME")
+        .context("HOME environment variable is not set")
+        .map(PathBuf::from)
 }
 
 #[cfg(test)]

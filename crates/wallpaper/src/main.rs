@@ -15,12 +15,12 @@
 //! ```
 use std::{
     env,
-    error::Error,
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     process::Command,
 };
 
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use shared::home_dir;
 use walkdir::WalkDir;
@@ -38,9 +38,9 @@ struct Args {
 }
 
 /// Main entry point for binary.
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     let args = Args::parse();
-    let wallpaper = pick_random_wallpaper(&args.wallpaper_dir)?.ok_or_else(|| {
+    let wallpaper = pick_random_wallpaper(&args.wallpaper_dir)?.with_context(|| {
         format!(
             "No wallpaper files found in {}",
             args.wallpaper_dir.display()
@@ -67,13 +67,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         {
             Ok(status) => status,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Err("awww not found on your system. Is the daemon running?".into());
+                return Err(anyhow!("awww not found on your system. Is the daemon running?"));
             }
             Err(err) => return Err(err.into()),
         };
 
         if !status.success() {
-            return Err("awww failed".into());
+            return Err(anyhow!("awww failed"));
         }
 
         println!("Set Wayland wallpaper to: {}", wallpaper.path().display());
@@ -88,13 +88,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         let status = match command.status() {
             Ok(command) => command,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Err("Feh not found on your system".to_string().into());
+                return Err(anyhow!("Feh not found on your system"));
             }
             Err(err) => return Err(err.into()),
         };
 
         if !status.success() {
-            return Err("feh failed".into());
+            return Err(anyhow!("feh failed"));
         }
 
         println!("Set X11 wallpaper to: {}", wallpaper.path().display());
@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 ///    let wallpaper = pick_random_wallpaper(wallpaper_dir)?;
 ///    assert_eq!(Option<walkdir::DirEntry>, wallpaper);
 /// ```
-fn pick_random_wallpaper(dir: &Path) -> Result<Option<walkdir::DirEntry>, Box<dyn Error>> {
+fn pick_random_wallpaper(dir: &Path) -> Result<Option<walkdir::DirEntry>> {
     let mut candidates = WalkDir::new(dir)
         .follow_links(false)
         .into_iter()
