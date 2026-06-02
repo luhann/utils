@@ -10,7 +10,9 @@
 //! shared = "0.1.0"
 //! ```
 
-use std::{env, error::Error, path::PathBuf};
+use std::{env, path::PathBuf};
+
+use anyhow::Context;
 
 /// Check if an OS command exists on the system.
 ///
@@ -83,8 +85,8 @@ pub fn command_exists(cmd: &str) -> bool {
 ///     println!("My home is at: {}", path.display());
 /// }
 /// ```
-pub fn home_dir() -> Result<PathBuf, Box<dyn Error>> {
-    let home = env::var_os("HOME").ok_or("HOME is not set")?;
+pub fn home_dir() -> anyhow::Result<std::path::PathBuf> {
+    let home = env::var_os("HOME").context("HOME environment variable is not set")?;
 
     Ok(PathBuf::from(home))
 }
