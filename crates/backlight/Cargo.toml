@@ -5,4 +5,5 @@ edition = "2024"
 description = "A utility to control external monitor brightness through `ddcutil`."
 
 [dependencies]
+anyhow = { workspace = true }
 clap = { workspace = true }

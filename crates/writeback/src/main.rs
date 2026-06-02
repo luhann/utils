@@ -17,7 +17,7 @@
 //! ```
 use std::{
     fs::File,
-    io::{self, Write},
+    io::{self, Seek, Write},
     thread,
     time::Duration,
 };
@@ -48,23 +48,21 @@ struct Args {
 /// Main entry point for binary
 fn main() {
     let args = Args::parse();
+    let delay = Duration::from_secs(args.interval);
+
+    let mut file = match File::open("/proc/meminfo") {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error opening /proc/meminfo: {e}");
+            std::process::exit(1);
+        }
+    };
 
     loop {
-        let file = match File::open("/proc/meminfo") {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Error reading file: {e}");
-                if args.daemon {
-                    thread::sleep(Duration::from_secs(args.interval));
-                    continue;
-                } else {
-                    std::process::exit(1);
-                }
-            }
-        };
+        let _ = file.seek(io::SeekFrom::Start(0));
 
         // Pass the raw File descriptor directly.
-        let size_kb = match parse_writeback_kb(file) {
+        let size_kb = match parse_writeback_kb(&file) {
             Ok(value) => value,
             Err(e) => {
                 let msg = match e.kind() {
@@ -74,7 +72,7 @@ fn main() {
                 };
                 eprintln!("Error parsing meminfo: {msg}");
                 if args.daemon {
-                    thread::sleep(Duration::from_secs(args.interval));
+                    thread::sleep(delay);
                     continue;
                 } else {
                     std::process::exit(1);
@@ -115,7 +113,7 @@ fn main() {
             break;
         }
 
-        thread::sleep(Duration::from_secs(args.interval));
+        thread::sleep(delay);
     }
 }
 
@@ -124,13 +122,15 @@ fn main() {
 /// This implementation performs a single-pass scan over a 2KB stack buffer to avoid
 /// heap allocations and `BufReader` overhead.
 ///
+/// Given `/proc/meminfo` is a kernel generated virtual file We take it on faith that the "Writeback"
+/// key will existin the first 2KB `/proc/meminfo`.
+///
 /// # Performance
 /// - **Memory**: Uses a fixed `2048` byte array on the stack.
 /// - **Time**: O(n) where `n` is the bytes read (capped at 2KB).
 ///
 /// # Errors
-/// - `io::ErrorKind::NotFound`: If the "Writeback:" key isn't found in the first 4KB.
-/// - `io::ErrorKind::UnexpectedEof`: If the buffer is filled without finding the key.
+/// - `io::ErrorKind::NotFound`: If the "Writeback:" key isn't found in the first 2KB.
 /// # Example
 /// ```
 /// let input = b"Dirty: 0 kB\nWriteback: 1024 kB\nAnonPages: 0 kB";
@@ -143,33 +143,18 @@ fn parse_writeback_kb<R: io::Read>(mut reader: R) -> io::Result<u64> {
     let data = &buffer[..bytes_read];
 
     let needle = b"Writeback:";
-    if let Some(idx) = memmem::find(data, needle) {
-        let rest = &data[idx + needle.len()..];
-        let start_of_digits = rest.iter().position(|&b| b != b' ').unwrap_or(rest.len());
-        let digit_data = &rest[start_of_digits..];
+    let idx = memmem::find(data, needle).ok_or(io::ErrorKind::NotFound)?;
 
-        let mut value = 0u64;
-        let mut found_digit = false;
+    let rest = &data[idx + needle.len()..];
+    let start_of_digits = rest.iter().position(|&b| b != b' ').unwrap_or(rest.len());
+    let digit_data = &rest[start_of_digits..];
 
-        for &b in digit_data {
-            if b.is_ascii_digit() {
-                value = value * 10 + (b - b'0') as u64;
-                found_digit = true;
-            } else {
-                break;
-            }
-        }
+    let value = digit_data
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .fold(0u64, |acc, b| acc * 10 + (b - b'0') as u64);
 
-        if found_digit {
-            return Ok(value);
-        }
-    }
-
-    if bytes_read == buffer.len() {
-        return Err(io::ErrorKind::UnexpectedEof.into());
-    }
-
-    Err(io::ErrorKind::NotFound.into())
+    Ok(value)
 }
 
 #[cfg(test)]

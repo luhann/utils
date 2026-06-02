@@ -16,11 +16,11 @@
 //! ```
 
 use std::{
-    error::Error,
     io::Write,
     process::{Command, Stdio},
 };
 
+use anyhow::{bail, Result};
 use clap::Parser;
 use urlencoding::encode;
 
@@ -117,7 +117,7 @@ enum MenuResult {
 }
 
 /// Main entry point for binary
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     let args = Args::parse();
     let full_menu_text = build_menu_text();
     let mut show_help = args.help_menu;
@@ -193,7 +193,7 @@ fn build_menu_text() -> String {
 }
 
 /// Rofi menu loop
-fn run_menu(menu_text: &str) -> Result<MenuResult, Box<dyn Error>> {
+fn run_menu(menu_text: &str) -> Result<MenuResult> {
     // Rofi arguments, alt-h is used to exit and switch to help mode
     let args = vec!["-dmenu", "-sync", "-p", "search:", "-kb-custom-1", "Alt+h"];
 
@@ -205,7 +205,7 @@ fn run_menu(menu_text: &str) -> Result<MenuResult, Box<dyn Error>> {
     {
         Ok(child) => child,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err("Launcher 'rofi' not found on your system".into());
+            bail!("Launcher 'rofi' not found on your system");
         }
         Err(err) => return Err(err.into()),
     };

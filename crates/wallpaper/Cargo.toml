@@ -4,6 +4,7 @@ version = "0.2.1"
 edition = "2024"
 
 [dependencies]
+anyhow = { workspace = true }
 clap = { workspace = true }
 fastrand = { workspace = true }
 shared = { workspace = true }

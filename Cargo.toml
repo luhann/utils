@@ -1,3 +1,5 @@
+cargo-features = ["codegen-backend"]
+
 [workspace]
 members = [
   "crates/*"
@@ -23,3 +25,6 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[profile.dev]
+codegen-backend = "cranelift"

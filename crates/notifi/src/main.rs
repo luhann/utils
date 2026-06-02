@@ -6,6 +6,7 @@
 
 use std::borrow::Cow;
 
+use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -30,7 +31,7 @@ struct Args {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
     let args = Args::parse();
     let conn = Connection::session().await?;
 
